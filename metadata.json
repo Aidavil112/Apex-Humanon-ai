@@ -1,0 +1,6 @@
+{
+  "name": "APEX Humanoid",
+  "description": "Procedural WebGL2 particle humanoid robot with interactive voice agent, mood engine, gestures, and creative content tools.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

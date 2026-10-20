@@ -1,0 +1,794 @@
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { WebGLEngine, CHARACTERS, PORTRAIT_AVATARS, THEMES, ALL_AVATARS } from './engine/webgl';
+import { audio } from './engine/audio';
+import { MoodType } from './types';
+import { HudOverlay } from './components/HudOverlay';
+import { Dock } from './components/Dock';
+import { MenuSheet } from './components/MenuSheet';
+import { YouTubeModal } from './components/YouTubeModal';
+import { AskModal } from './components/AskModal';
+import { IntroGate } from './components/IntroGate';
+import { Toast } from './components/Toast';
+
+const DEVANAGARI_RE = /[\u0900-\u097F]/;
+
+const QUICK_RESPONSES: [RegExp, string | (() => string)][] = [
+  [/^(hi|hello|hey|namaste|namaskar|hii|helo)\b/i, 'Namaste. Main sun raha hoon.'],
+  [/(naam kya|who are you|tum kon|tum kaun|your name)/i, 'Main Apex Humanoid hoon, aapka apna assistant.'],
+  [/^(time|samay|kitne baje|what time)/i, () => 'Abhi ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + ' baje hain.'],
+  [/(theek ho|kaise ho|how are you)/i, 'Main bilkul theek hoon. Aap batao?'],
+  [/(thank|shukriya|dhanyavad)/i, 'Koi baat nahi.'],
+  [/(band ho|sleep|so jao|bye|good night)/i, 'Theek hai. Main yahin hoon jab zarurat ho.'],
+  [/(kya kar sakte|what can you do)/i, 'Main bol sakta hoon, sun sakta hoon, avatar badal sakta hoon, aur printer ka status bata sakta hoon.'],
+];
+
+export const App: React.FC = () => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hudCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const gestureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const engineRef = useRef<WebGLEngine | null>(null);
+
+  // UI state
+  const [entered, setEntered] = useState(false);
+  const [poweredOn, setPoweredOn] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [mood, setMoodState] = useState<MoodType>('idle');
+  const [themeIdx, setThemeIdx] = useState(0);
+  const [charIdx, setCharIdx] = useState(0);
+  const [fps, setFps] = useState(0);
+  const [points, setPoints] = useState(0);
+  const [showHint, setShowHint] = useState(true);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<any>(null);
+
+  // Features
+  const [gestureActive, setGestureActive] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [langMode, setLangMode] = useState<'en-IN' | 'hi-IN'>('en-IN');
+  const [deepMode, setDeepMode] = useState(false);
+  const [bgOn, setBgOn] = useState(true);
+  const [sfxOn, setSfxOn] = useState(true);
+  const [soundOn, setSoundOn] = useState(false);
+  const [photoMode, setPhotoMode] = useState(false);
+
+  // Modals
+  const [youtubeOpen, setYoutubeOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+
+  // Gesture tracking internals
+  const gestureStreamRef = useRef<MediaStream | null>(null);
+  const gestureVideoRef = useRef<HTMLVideoElement | null>(null);
+  const gestureAnimRef = useRef<number | null>(null);
+  const gestureSeenRef = useRef<boolean>(false);
+  const gestureCoordsRef = useRef<{ sx: number; sy: number }>({ sx: 0, sy: 0 });
+
+  // Ears (Speech Recognition) internals
+  const recRef = useRef<any>(null);
+  const busyRef = useRef<boolean>(false);
+  const lastSubmitRef = useRef<{ time: number; text: string }>({ time: 0, text: '' });
+  const chatMemRef = useRef<{ role: string; text: string }[]>([]);
+
+  const toast = useCallback((msg: string, ms = 3400) => {
+    setToastMessage(msg);
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToastMessage(null), ms);
+  }, []);
+
+  const hideHint = useCallback(() => {
+    setShowHint(false);
+  }, []);
+
+  const setMood = useCallback(
+    (newMood: MoodType) => {
+      audio.mood(newMood);
+      setMoodState(newMood);
+      if (engineRef.current) {
+        engineRef.current.mood = newMood;
+      }
+    },
+    []
+  );
+
+  const voiceFor = useCallback((text: string): SpeechSynthesisVoice | null => {
+    if (!('speechSynthesis' in window)) return null;
+    const voices = speechSynthesis.getVoices();
+    const isDevanagari = DEVANAGARI_RE.test(text);
+    if (isDevanagari) {
+      const hi = voices.find((v) => v.lang.startsWith('hi'));
+      if (hi) return hi;
+    }
+    const enIn = voices.find((v) => v.lang === 'en-IN');
+    if (enIn) return enIn;
+    return voices.find((v) => v.lang.startsWith('en')) || voices[0] || null;
+  }, []);
+
+  const speak = useCallback(
+    (text: string, onEnd?: () => void) => {
+      if (!('speechSynthesis' in window)) return;
+      speechSynthesis.cancel();
+      try {
+        speechSynthesis.resume();
+      } catch (e) {}
+
+      const u = new SpeechSynthesisUtterance(text);
+      const voice = voiceFor(text);
+      if (voice) u.voice = voice;
+      u.lang = DEVANAGARI_RE.test(text) ? 'hi-IN' : langMode;
+      u.rate = langMode === 'hi-IN' ? 0.94 : 0.98;
+      u.pitch = 0.92;
+      u.volume = 1;
+
+      u.onboundary = () => {
+        if (engineRef.current) {
+          engineRef.current.voiceTarget = 1.0;
+        }
+      };
+
+      u.onend = () => {
+        if (engineRef.current) {
+          engineRef.current.voiceTarget = 0.15;
+        }
+        setTimeout(() => {
+          setMood('idle');
+          onEnd?.();
+        }, 260);
+      };
+
+      u.onerror = () => {
+        setMood('idle');
+      };
+
+      setMood('speaking');
+      speechSynthesis.speak(u);
+    },
+    [voiceFor, langMode, setMood]
+  );
+
+  const handleUtterance = useCallback(
+    async (text: string) => {
+      if (!text || busyRef.current) return;
+      busyRef.current = true;
+      setMood('thinking');
+
+      // 3D Printer check
+      if (/\b(printer|print|3d)\b/i.test(text)) {
+        try {
+          const r = await fetch('/printer');
+          const j = await r.json();
+          const say = j.error
+            ? `Printer: ${j.error}`
+            : !j.configured
+            ? 'No hardware printer configured. Virtual benchy simulation running.'
+            : `Printer ${j.state || ''}. File ${j.file || 'none'}${
+                j.progress != null ? `, ${j.progress} percent done.` : '.'
+              }`;
+          toast(`“${say}”`, 5000);
+          speak(say, () => {
+            busyRef.current = false;
+          });
+          return;
+        } catch (e) {
+          busyRef.current = false;
+        }
+      }
+
+      // Quick offline/instant responses
+      for (const [re, out] of QUICK_RESPONSES) {
+        if (re.test(text.trim())) {
+          const reply = typeof out === 'function' ? out() : out;
+          toast(`“${reply}”`, 3500);
+          speak(reply, () => {
+            busyRef.current = false;
+          });
+          return;
+        }
+      }
+
+      // Ask brain from server
+      try {
+        const t0 = performance.now();
+        const r = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            text,
+            history: chatMemRef.current,
+            model: deepMode ? 'gemini-3.8-flash' : undefined,
+          }),
+        });
+        const j = await r.json();
+        const reply = j.text || 'I hear you, standing by.';
+        const ms = Math.round(performance.now() - t0);
+        toast(`“${reply.slice(0, 90)}” · ${ms}ms`, 5000);
+        chatMemRef.current.push({ role: 'user', text });
+        chatMemRef.current.push({ role: 'model', text: reply });
+        while (chatMemRef.current.length > 8) chatMemRef.current.shift();
+
+        speak(reply, () => {
+          busyRef.current = false;
+        });
+      } catch (err) {
+        const fallback = 'Systems active, brain offline.';
+        toast(fallback, 3000);
+        speak(fallback, () => {
+          busyRef.current = false;
+        });
+      }
+    },
+    [setMood, toast, speak, deepMode]
+  );
+
+  const startEars = useCallback(() => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      toast('SpeechRecognition not supported in this browser.');
+      return;
+    }
+    try {
+      const r = new SR();
+      r.lang = langMode;
+      r.interimResults = true;
+      r.continuous = true;
+      r.maxAlternatives = 1;
+
+      r.onresult = (e: any) => {
+        let finalTxt = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalTxt += t;
+        }
+        if (finalTxt.trim()) {
+          const now = Date.now();
+          if (now - lastSubmitRef.current.time > 1200 || finalTxt !== lastSubmitRef.current.text) {
+            lastSubmitRef.current = { time: now, text: finalTxt };
+            toast(`Heard: “${finalTxt}”`, 2500);
+            handleUtterance(finalTxt);
+          }
+        }
+      };
+
+      r.onerror = (ev: any) => {
+        if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+          toast('Microphone access blocked.');
+          setIsListening(false);
+        }
+      };
+
+      r.onend = () => {
+        if (recRef.current) {
+          try {
+            r.start();
+          } catch (e) {}
+        }
+      };
+
+      recRef.current = r;
+      r.start();
+      setIsListening(true);
+      setMood('listening');
+      toast('Listening — speak anytime');
+    } catch (e) {
+      toast('Could not start microphone');
+    }
+  }, [langMode, toast, setMood, handleUtterance]);
+
+  const stopEars = useCallback(() => {
+    if (recRef.current) {
+      try {
+        recRef.current.stop();
+      } catch (e) {}
+      recRef.current = null;
+    }
+    setIsListening(false);
+    setMood('idle');
+  }, [setMood]);
+
+  const toggleMic = useCallback(() => {
+    audio.ensureCtx();
+    if (isListening) {
+      stopEars();
+    } else {
+      startEars();
+    }
+  }, [isListening, startEars, stopEars]);
+
+  // Hand gesture tracking
+  const startGesture = useCallback(async () => {
+    audio.ensureCtx();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 320, height: 240, facingMode: 'user' },
+      });
+      gestureStreamRef.current = stream;
+      const v = document.createElement('video');
+      v.srcObject = stream;
+      v.muted = true;
+      v.playsInline = true;
+      await v.play();
+      gestureVideoRef.current = v;
+      setGestureActive(true);
+      setMood('listening');
+      toast('Hand tracking on — gesture to move head');
+
+      const workCanvas = document.createElement('canvas');
+      workCanvas.width = 80;
+      workCanvas.height = 60;
+      const wCtx = workCanvas.getContext('2d', { willReadFrequently: true })!;
+
+      const loop = () => {
+        if (!gestureStreamRef.current) return;
+        if (v && v.readyState >= 2) {
+          wCtx.drawImage(v, 0, 0, 80, 60);
+          const d = wCtx.getImageData(0, 0, 80, 60).data;
+          let sx = 0,
+            sy = 0,
+            n = 0;
+          for (let y = 0; y < 60; y++) {
+            for (let x = 0; x < 80; x++) {
+              const i = (y * 80 + x) * 4;
+              const r = d[i],
+                g = d[i + 1],
+                b = d[i + 2];
+              const mx = Math.max(r, g, b),
+                mn = Math.min(r, g, b);
+              if (r > 95 && g > 40 && b > 20 && mx - mn > 18 && r > g + 8 && r > b + 8 && Math.abs(r - g) < 90) {
+                sx += x;
+                sy += y;
+                n++;
+              }
+            }
+          }
+          if (n > 90) {
+            const cx = sx / n,
+              cy = sy / n;
+            if (!gestureSeenRef.current) {
+              gestureSeenRef.current = true;
+              audio.acquire();
+            }
+            const px = gestureCoordsRef.current.sx;
+            const py = gestureCoordsRef.current.sy;
+            gestureCoordsRef.current.sx += (cx / 80 - gestureCoordsRef.current.sx) * 0.25;
+            gestureCoordsRef.current.sy += (cy / 60 - gestureCoordsRef.current.sy) * 0.25;
+
+            if (engineRef.current) {
+              engineRef.current.targetYaw = (gestureCoordsRef.current.sx - 0.5) * 1.5 * 0.62;
+              engineRef.current.targetPitch = (gestureCoordsRef.current.sy - 0.5) * 1.3 * 0.26;
+            }
+            const velocity = Math.min(1, Math.hypot(gestureCoordsRef.current.sx - px, gestureCoordsRef.current.sy - py) * 9);
+            if (velocity > 0.12) audio.tick(velocity);
+          } else if (gestureSeenRef.current) {
+            gestureSeenRef.current = false;
+            audio.release();
+          }
+
+          if (gestureCanvasRef.current) {
+            const gCtx = gestureCanvasRef.current.getContext('2d');
+            if (gCtx) {
+              gCtx.drawImage(v, 0, 0, 120, 90);
+              gCtx.globalAlpha = 0.4;
+              gCtx.strokeStyle = '#4fd2ff';
+              gCtx.beginPath();
+              gCtx.arc(gestureCoordsRef.current.sx * 120, gestureCoordsRef.current.sy * 90, 9, 0, Math.PI * 2);
+              gCtx.stroke();
+              gCtx.globalAlpha = 1;
+            }
+          }
+        }
+        gestureAnimRef.current = requestAnimationFrame(loop);
+      };
+      gestureAnimRef.current = requestAnimationFrame(loop);
+    } catch (e: any) {
+      toast('Camera blocked or unavailable');
+      setGestureActive(false);
+    }
+  }, [setMood, toast]);
+
+  const stopGesture = useCallback(() => {
+    if (gestureAnimRef.current) cancelAnimationFrame(gestureAnimRef.current);
+    if (gestureStreamRef.current) {
+      gestureStreamRef.current.getTracks().forEach((t) => t.stop());
+      gestureStreamRef.current = null;
+    }
+    gestureVideoRef.current = null;
+    setGestureActive(false);
+    if (gestureSeenRef.current) {
+      gestureSeenRef.current = false;
+      audio.release();
+    }
+  }, []);
+
+  const toggleGesture = useCallback(() => {
+    if (gestureActive) {
+      stopGesture();
+      toast('Hand tracking off');
+    } else {
+      startGesture();
+    }
+  }, [gestureActive, startGesture, stopGesture, toast]);
+
+  // Master Power
+  const togglePower = useCallback(() => {
+    audio.ensureCtx();
+    if (!poweredOn) {
+      setPoweredOn(true);
+      audio.powerUp();
+      if (!soundOn) {
+        setSoundOn(true);
+        audio.setSound(true);
+      }
+      if (!sfxOn) {
+        setSfxOn(true);
+        audio.setSfx(true);
+      }
+      if (!gestureActive) startGesture();
+      if (!isListening) startEars();
+      toast('Systems online · speak or move your hand', 3000);
+    } else {
+      setPoweredOn(false);
+      if (isListening) stopEars();
+      if (gestureActive) stopGesture();
+      setSoundOn(false);
+      audio.setSound(false);
+      setMood('idle');
+      toast('Systems resting', 2000);
+    }
+  }, [poweredOn, soundOn, sfxOn, gestureActive, isListening, startGesture, stopGesture, startEars, stopEars, toast, setMood]);
+
+  // Characters
+  const cycleCharacter = useCallback(() => {
+    audio.ensureCtx();
+    audio.powerUp();
+    const nextIdx = (charIdx + 1) % ALL_AVATARS.length;
+    setCharIdx(nextIdx);
+    const c = ALL_AVATARS[nextIdx];
+
+    if (c.src) {
+      const img = new Image();
+      img.onload = () => {
+        if (engineRef.current) {
+          engineRef.current.loadPhotoAvatar(img, c.view || {});
+          setPhotoMode(true);
+          toast(`Avatar · ${c.name} · ${(engineRef.current['PHOTO']?.count / 1000 || 0).toFixed(0)}k points`);
+        }
+      };
+      img.src = c.src;
+    } else {
+      if (engineRef.current) {
+        engineRef.current.photoMode = false;
+        engineRef.current.buildFigure(c);
+        engineRef.current.reupload();
+        setPhotoMode(false);
+        toast(`Avatar · ${c.name}`);
+      }
+    }
+  }, [charIdx, toast]);
+
+  const handlePhotoUpload = useCallback(
+    (file: File) => {
+      audio.ensureCtx();
+      const img = new Image();
+      img.onload = () => {
+        if (engineRef.current) {
+          engineRef.current.loadPhotoAvatar(img);
+          setPhotoMode(true);
+          setMood('idle');
+          audio.assemble();
+          toast(`Custom face loaded into point cloud!`, 4000);
+        }
+      };
+      img.src = URL.createObjectURL(file);
+    },
+    [setMood, toast]
+  );
+
+  const exitPhoto = useCallback(() => {
+    if (engineRef.current) {
+      engineRef.current.photoMode = false;
+      engineRef.current.buildFigure(CHARACTERS[0]);
+      engineRef.current.reupload();
+      setPhotoMode(false);
+      toast('Back to humanoid form', 1500);
+    }
+  }, [toast]);
+
+  // Themes
+  const cycleTheme = useCallback(() => {
+    audio.ensureCtx();
+    audio.theme();
+    const nextIdx = (themeIdx + 1) % THEMES.length;
+    setThemeIdx(nextIdx);
+    if (engineRef.current) {
+      engineRef.current.themeIdx = nextIdx;
+      document.documentElement.style.setProperty(
+        '--cyan',
+        `rgb(${THEMES[nextIdx].accent.map((v) => Math.round(v * 255)).join(',')})`
+      );
+    }
+    toast(`Theme: ${THEMES[nextIdx].name}`);
+  }, [themeIdx, toast]);
+
+  // Voice Test
+  const testVoice = useCallback(() => {
+    audio.ensureCtx();
+    const sample = 'Hello! Main aapka APEX humanoid hoon. Everything is rendering live.';
+    toast('Testing speech synthesis…', 2000);
+    speak(sample);
+  }, [toast, speak]);
+
+  // Replay
+  const replayAssembly = useCallback(() => {
+    audio.ensureCtx();
+    if (engineRef.current) {
+      engineRef.current.assemble = 0;
+      audio.assemble();
+      toast('Rebuilding point cloud…', 1500);
+    }
+  }, [toast]);
+
+  // Initialize WebGL engine once canvases are ready
+  useEffect(() => {
+    if (!canvasRef.current || !hudCanvasRef.current) return;
+    try {
+      const engine = new WebGLEngine(canvasRef.current, hudCanvasRef.current);
+      engine.onFpsUpdate = (f, p) => {
+        setFps(f);
+        setPoints(p);
+      };
+      engineRef.current = engine;
+
+      let animId: number;
+      const render = (time: number) => {
+        engine.frame(time);
+        animId = requestAnimationFrame(render);
+      };
+      animId = requestAnimationFrame(render);
+
+      return () => {
+        cancelAnimationFrame(animId);
+        engine.destroy();
+      };
+    } catch (e) {
+      console.error('WebGL engine startup error', e);
+    }
+  }, []);
+
+  // Pointer follow listener
+  useEffect(() => {
+    const handlePointerMove = (e: PointerEvent) => {
+      hideHint();
+      if (!engineRef.current) return;
+      const nx = (e.clientX / window.innerWidth - 0.5) * 2;
+      const ny = (e.clientY / window.innerHeight - 0.5) * 2;
+      engineRef.current.targetYaw = nx * 0.62;
+      engineRef.current.targetPitch = -ny * 0.26;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches[0] && engineRef.current) {
+        const nx = (e.touches[0].clientX / window.innerWidth - 0.5) * 2;
+        const ny = (e.touches[0].clientY / window.innerHeight - 0.5) * 2;
+        engineRef.current.targetYaw = nx * 0.62;
+        engineRef.current.targetPitch = -ny * 0.26;
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('touchmove', handleTouchMove);
+    };
+  }, [hideHint]);
+
+  // Remote state poller (/state)
+  useEffect(() => {
+    let lastSeq = -1;
+    const interval = setInterval(async () => {
+      try {
+        const r = await fetch('/state');
+        if (!r.ok) return;
+        const st = await r.json();
+        if (lastSeq < 0) {
+          lastSeq = st.seq;
+          return;
+        }
+        if (st.seq === lastSeq) return;
+        lastSeq = st.seq;
+
+        if (st.mood) setMood(st.mood);
+        if (typeof st.theme === 'number') {
+          setThemeIdx(st.theme);
+          if (engineRef.current) engineRef.current.themeIdx = st.theme;
+        }
+        if (st.say) {
+          toast(`Remote · “${st.say.slice(0, 48)}”`);
+          speak(st.say);
+        }
+      } catch (e) {}
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [setMood, toast, speak]);
+
+  // Keyboard controls
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === '1') setMood('idle');
+      if (e.key === '2') setMood('listening');
+      if (e.key === '3') setMood('thinking');
+      if (e.key === '4') setMood('speaking');
+      if (e.key === ' ') {
+        e.preventDefault();
+        setMood('speaking');
+      }
+      if (e.key === 't' || e.key === 'T') cycleTheme();
+      if (e.key === 'g' || e.key === 'G') toggleGesture();
+      if (e.key === 'c' || e.key === 'C') cycleCharacter();
+      if (e.key === 'r' || e.key === 'R') replayAssembly();
+      if (e.key === 'b' || e.key === 'B') {
+        setBgOn((prev) => {
+          const next = !prev;
+          if (engineRef.current) engineRef.current.bgOn = next;
+          toast(`Background ${next ? 'on' : 'off'}`);
+          return next;
+        });
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        setSfxOn((prev) => {
+          const next = !prev;
+          audio.setSfx(next);
+          toast(`SFX ${next ? 'on' : 'off'}`);
+          return next;
+        });
+      }
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [setMood, cycleTheme, toggleGesture, cycleCharacter, replayAssembly, toast]);
+
+  const handleEnter = () => {
+    setEntered(true);
+    audio.ensureCtx();
+    audio.assemble();
+    if (engineRef.current) {
+      engineRef.current.started = true;
+    }
+  };
+
+  return (
+    <div className="relative w-full h-full overflow-hidden select-none">
+      {/* 3D WebGL Canvas Layer */}
+      <div className="fixed inset-0 pointer-events-none">
+        <canvas ref={canvasRef} className="w-full h-full pointer-events-auto cursor-crosshair" />
+        <canvas ref={hudCanvasRef} className="absolute inset-0 pointer-events-none opacity-80" />
+      </div>
+
+      {/* Cyberpunk Vignette & Floor Glow */}
+      <div className="veil" />
+      <div className="floor" />
+
+      {/* HUD Overlay */}
+      <HudOverlay
+        mood={mood}
+        fps={fps}
+        points={points}
+        gestureActive={gestureActive}
+        gestureCanvasRef={gestureCanvasRef}
+        showHint={showHint}
+        themeAccent={THEMES[themeIdx].accent}
+      />
+
+      {/* Bottom Floating Dock */}
+      <Dock
+        poweredOn={poweredOn}
+        menuOpen={menuOpen}
+        isListening={isListening}
+        onTogglePower={togglePower}
+        onToggleMenu={() => {
+          audio.ensureCtx();
+          audio.tick(0.6);
+          setMenuOpen((prev) => !prev);
+        }}
+        onToggleMic={toggleMic}
+      />
+
+      {/* Slide-up Menu Drawer */}
+      <MenuSheet
+        isOpen={menuOpen}
+        currentMood={mood}
+        onSelectMood={(m) => {
+          setMood(m);
+          setMenuOpen(false);
+        }}
+        gestureActive={gestureActive}
+        onToggleGesture={toggleGesture}
+        characters={ALL_AVATARS}
+        currentCharIdx={charIdx}
+        onCycleCharacter={cycleCharacter}
+        photoMode={photoMode}
+        onPhotoUpload={handlePhotoUpload}
+        onExitPhoto={exitPhoto}
+        onReplay={replayAssembly}
+        onOpenAsk={() => {
+          setMenuOpen(false);
+          setAskOpen(true);
+        }}
+        onVoiceTest={testVoice}
+        deepMode={deepMode}
+        onToggleDeep={() => {
+          setDeepMode((prev) => {
+            const next = !prev;
+            toast(next ? 'Deep model enabled' : 'Fast flash model enabled');
+            return next;
+          });
+        }}
+        onOpenYouTube={() => {
+          setMenuOpen(false);
+          setYoutubeOpen(true);
+        }}
+        langMode={langMode}
+        onToggleLang={() => {
+          setLangMode((prev) => {
+            const next = prev === 'en-IN' ? 'hi-IN' : 'en-IN';
+            toast(`Language: ${next === 'hi-IN' ? 'Hindi' : 'English'}`);
+            return next;
+          });
+        }}
+        themes={THEMES}
+        currentThemeIdx={themeIdx}
+        onCycleTheme={cycleTheme}
+        bgOn={bgOn}
+        onToggleBg={() => {
+          setBgOn((prev) => {
+            const next = !prev;
+            if (engineRef.current) engineRef.current.bgOn = next;
+            toast(`Background ${next ? 'on' : 'off'}`);
+            return next;
+          });
+        }}
+        sfxOn={sfxOn}
+        onToggleSfx={() => {
+          setSfxOn((prev) => {
+            const next = !prev;
+            audio.setSfx(next);
+            toast(`SFX ${next ? 'on' : 'off'}`);
+            return next;
+          });
+        }}
+        soundOn={soundOn}
+        onToggleSound={() => {
+          setSoundOn((prev) => {
+            const next = !prev;
+            audio.setSound(next);
+            toast(`Ambient drone ${next ? 'on' : 'off'}`);
+            return next;
+          });
+        }}
+        onClose={() => setMenuOpen(false)}
+      />
+
+      {/* Notification Toast */}
+      <Toast message={toastMessage} />
+
+      {/* YouTube Shorts & Content Studio Modal */}
+      <YouTubeModal
+        isOpen={youtubeOpen}
+        onClose={() => setYoutubeOpen(false)}
+        onToast={toast}
+      />
+
+      {/* Ask Question Modal */}
+      <AskModal
+        isOpen={askOpen}
+        onClose={() => setAskOpen(false)}
+        onSubmit={handleUtterance}
+      />
+
+      {/* Initial Entry Gate */}
+      {!entered && <IntroGate onEnter={handleEnter} />}
+    </div>
+  );
+};

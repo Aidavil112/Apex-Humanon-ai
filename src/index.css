@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+:root {
+  --cyan: #4fd2ff;
+  --cyan-dim: #1c4a63;
+  --ink: #04070b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: #cfe4f5;
+  font-family: var(--mono);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+canvas {
+  display: block;
+}
+
+.veil {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 85% at 50% 42%, transparent 38%, rgba(0,0,0,.55) 78%, #000 100%),
+    repeating-linear-gradient(to bottom, rgba(120,220,255,.028) 0 1px, transparent 1px 3px);
+  mix-blend-mode: normal;
+  z-index: 2;
+}
+
+.floor {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: min(38vh, 320px);
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(2,5,8,.92) 0%, rgba(2,5,8,.72) 38%, transparent 100%);
+  z-index: 3;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.95); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+
+.pulse-dot {
+  animation: pulse 2.4s ease-in-out infinite;
+}
