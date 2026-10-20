@@ -1,0 +1,15 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+
+# Logs
+*.log
+npm-debug.log*
