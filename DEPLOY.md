@@ -19,17 +19,25 @@ git push -u origin main
 `.gitignore` me `.env` already blocked hai — key kabhi push nahi hogi.
 
 ### 2. Render pe service banao
+
+**Sabse aasan — Blueprint:** repo me `render.yaml` hai. Render → **New +** → **Blueprint** → repo select → **Apply**. Build/start/region sab auto-set ho jaata hai. API keys baad me Environment se daal dena.
+
+**Ya manually (Web Service):**
 1. [render.com](https://render.com) → login with GitHub
 2. **New +** → **Web Service**
 3. Repo select karo
 4. Settings:
+   - **Region:** Singapore (Southeast Asia)
    - **Runtime:** Node
-   - **Build Command:** `npm install --omit=dev`
-   - **Start Command:** `node server.js`
+   - **Build Command:** `npm install && npm run build`
+   - **Start Command:** `npm start`
    - **Plan:** Free
+
+   ⚠️ Purana `node server.js` / `npm install --omit=dev` mat use karo — yeh rebuild hai (TypeScript + Vite). `server.ts` ko `tsx` chalata hai aur frontend ko pehle `vite build` karna padta hai. `--omit=dev` se `vite`/`tsx` nahi aayenge aur build fail hoga.
 5. **Environment → Add Environment Variable**
-   - Key: `ELEVENLABS_API_KEY`
-   - Value: `sk_...` (paste)
+   - `NODE_ENV` = `production`
+   - `GEMINI_API_KEY` = `AIza...` (brain/chat ke liye)
+   - `ELEVENLABS_API_KEY` = `sk_...` (voice/TTS ke liye)
 6. **Create Web Service** → 2-3 min wait
 
 Link milega: `https://apex-humanoid-xxxx.onrender.com` — wahi kholo, ENTER dabao. Bas.

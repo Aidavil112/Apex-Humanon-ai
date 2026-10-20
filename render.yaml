@@ -1,0 +1,24 @@
+# Render blueprint — one-click deploy for APEX Humanoid
+# Dashboard: New + → Blueprint → select this repo → Apply
+# Secrets (API keys) are created empty — fill them in the Render dashboard.
+# They are never stored in git (sync: false = dashboard-managed).
+services:
+  - type: web
+    name: apex-humanoid
+    runtime: node
+    region: singapore
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
