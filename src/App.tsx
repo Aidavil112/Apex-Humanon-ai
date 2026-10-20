@@ -1,14 +1,20 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { WebGLEngine, CHARACTERS, PORTRAIT_AVATARS, THEMES, ALL_AVATARS } from './engine/webgl';
 import { audio } from './engine/audio';
-import { MoodType } from './types';
+import { MoodType, SentimentResult } from './types';
 import { HudOverlay } from './components/HudOverlay';
 import { Dock } from './components/Dock';
 import { MenuSheet } from './components/MenuSheet';
 import { YouTubeModal } from './components/YouTubeModal';
+import { ReelModal } from './components/ReelModal';
 import { AskModal } from './components/AskModal';
 import { IntroGate } from './components/IntroGate';
 import { Toast } from './components/Toast';
+import { AudioWaveform } from './components/AudioWaveform';
+import { TradingBotModal } from './components/TradingBotModal';
+import { AgentCompanyModal } from './components/AgentCompanyModal';
+import { useAutoTrader } from './hooks/useAutoTrader';
+import { analyzeSentiment } from './engine/sentiment';
 
 const DEVANAGARI_RE = /[\u0900-\u097F]/;
 
@@ -16,10 +22,12 @@ const QUICK_RESPONSES: [RegExp, string | (() => string)][] = [
   [/^(hi|hello|hey|namaste|namaskar|hii|helo)\b/i, 'Namaste. Main sun raha hoon.'],
   [/(naam kya|who are you|tum kon|tum kaun|your name)/i, 'Main Apex Humanoid hoon, aapka apna assistant.'],
   [/^(time|samay|kitne baje|what time)/i, () => 'Abhi ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + ' baje hain.'],
-  [/(theek ho|kaise ho|how are you)/i, 'Main bilkul theek hoon. Aap batao?'],
+  [/(theek ho|kaise ho|how are you)/i, 'Main bilkul theek hoon. Dil ki dhadkan normal hai.'],
+  [/(chief of staff|agent company|brand brain|sean purvis|colton|multi agent|company)/i, 'Chief of Staff command center ready hai. 19 sub-agents Brand Brain se connected hain.'],
+  [/(trading bot|crypto|trade|algo trader|market pulse|bitcoin)/i, 'Trading bot active hai. Market sentiment excited hai, heart rate surge ho raha hai!'],
   [/(thank|shukriya|dhanyavad)/i, 'Koi baat nahi.'],
   [/(band ho|sleep|so jao|bye|good night)/i, 'Theek hai. Main yahin hoon jab zarurat ho.'],
-  [/(kya kar sakte|what can you do)/i, 'Main bol sakta hoon, sun sakta hoon, avatar badal sakta hoon, aur printer ka status bata sakta hoon.'],
+  [/(kya kar sakte|what can you do)/i, 'Main bol sakta hoon, sun sakta hoon, trading bot chala sakta hoon, aur dil ki dhadkan ke sath pulse karta hoon.'],
 ];
 
 export const App: React.FC = () => {
@@ -40,6 +48,13 @@ export const App: React.FC = () => {
   const [showHint, setShowHint] = useState(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<any>(null);
+  const [sentimentInfo, setSentimentInfo] = useState<SentimentResult | null>(null);
+  const activeSentimentRef = useRef<MoodType | null>(null);
+
+  // Virtual Heart Rate State (synchronized with humanoid core particles)
+  const [heartRate, setHeartRate] = useState<number>(72);
+  const [heartPulse, setHeartPulse] = useState<number>(0);
+  const [isElevated, setIsElevated] = useState<boolean>(false);
 
   // Features
   const [gestureActive, setGestureActive] = useState(false);
@@ -54,6 +69,34 @@ export const App: React.FC = () => {
   // Modals
   const [youtubeOpen, setYoutubeOpen] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
+  const [reelOpen, setReelOpen] = useState(false);
+  const [tradingBotOpen, setTradingBotOpen] = useState(false);
+  const [agentCompanyOpen, setAgentCompanyOpen] = useState(false);
+
+  // Gesture Smoothing & Sensitivity State
+  const [gestureSmoothing, setGestureSmoothingState] = useState<number>(() => {
+    const saved = localStorage.getItem('apex.gesture_smoothing');
+    return saved ? parseFloat(saved) : 0.25;
+  });
+  const [gestureSensitivity, setGestureSensitivityState] = useState<number>(() => {
+    const saved = localStorage.getItem('apex.gesture_sensitivity');
+    return saved ? parseFloat(saved) : 1.5;
+  });
+
+  const gestureSmoothingRef = useRef<number>(gestureSmoothing);
+  const gestureSensitivityRef = useRef<number>(gestureSensitivity);
+
+  const setGestureSmoothing = useCallback((val: number) => {
+    setGestureSmoothingState(val);
+    gestureSmoothingRef.current = val;
+    localStorage.setItem('apex.gesture_smoothing', String(val));
+  }, []);
+
+  const setGestureSensitivity = useCallback((val: number) => {
+    setGestureSensitivityState(val);
+    gestureSensitivityRef.current = val;
+    localStorage.setItem('apex.gesture_sensitivity', String(val));
+  }, []);
 
   // Gesture tracking internals
   const gestureStreamRef = useRef<MediaStream | null>(null);
@@ -64,6 +107,7 @@ export const App: React.FC = () => {
 
   // Ears (Speech Recognition) internals
   const recRef = useRef<any>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
   const busyRef = useRef<boolean>(false);
   const lastSubmitRef = useRef<{ time: number; text: string }>({ time: 0, text: '' });
   const chatMemRef = useRef<{ role: string; text: string }[]>([]);
@@ -118,10 +162,16 @@ export const App: React.FC = () => {
       u.pitch = 0.92;
       u.volume = 1;
 
+      u.onstart = () => {
+        audio.ensureCtx();
+        audio.triggerVoicePulse(1.0);
+      };
+
       u.onboundary = () => {
         if (engineRef.current) {
           engineRef.current.voiceTarget = 1.0;
         }
+        audio.triggerVoicePulse(0.85);
       };
 
       u.onend = () => {
@@ -129,26 +179,104 @@ export const App: React.FC = () => {
           engineRef.current.voiceTarget = 0.15;
         }
         setTimeout(() => {
+          activeSentimentRef.current = null;
+          setSentimentInfo(null);
           setMood('idle');
           onEnd?.();
-        }, 260);
+        }, 300);
       };
 
       u.onerror = () => {
+        activeSentimentRef.current = null;
+        setSentimentInfo(null);
         setMood('idle');
       };
 
-      setMood('speaking');
+      // If an emotional tone was detected from user sentiment, keep that emotional mood active; otherwise use 'speaking'
+      if (!activeSentimentRef.current || activeSentimentRef.current === 'idle') {
+        setMood('speaking');
+      } else {
+        audio.mood(activeSentimentRef.current);
+      }
       speechSynthesis.speak(u);
     },
     [voiceFor, langMode, setMood]
   );
 
+  const handleTradeBurst = useCallback(
+    (type: 'BUY' | 'SELL', details: { pair: string; price: number; profit?: number }) => {
+      // Trigger glowing particle burst animation overlay on the main WebGL canvas
+      if (engineRef.current) {
+        engineRef.current.triggerTradeBurst(type, details);
+      }
+      audio.heartThump(type === 'BUY');
+      setMood(type === 'BUY' ? 'excited' : 'happy');
+    },
+    [setMood]
+  );
+
+  const handleTriggerSentimentTrade = useCallback(
+    (m: MoodType, msg: string) => {
+      setMood(m);
+      activeSentimentRef.current = m;
+      toast(msg, 3500);
+      audio.heartThump(true);
+      speak(msg);
+    },
+    [setMood, toast, speak]
+  );
+
+  const autoTrader = useAutoTrader({
+    currentMood: mood,
+    currentHeartRate: heartRate,
+    onTriggerSentimentTrade: handleTriggerSentimentTrade,
+    onTradeBurst: handleTradeBurst,
+  });
+
   const handleUtterance = useCallback(
     async (text: string) => {
       if (!text || busyRef.current) return;
       busyRef.current = true;
-      setMood('thinking');
+
+      // 1. Client-side zero-latency sentiment tone analysis
+      const sentiment = analyzeSentiment(text);
+      setSentimentInfo(sentiment);
+
+      if (sentiment.mood !== 'neutral' && sentiment.mood !== 'idle') {
+        activeSentimentRef.current = sentiment.mood;
+        setMood(sentiment.mood);
+        const emoji =
+          sentiment.mood === 'excited'
+            ? '🚀'
+            : sentiment.mood === 'happy'
+            ? '😊'
+            : sentiment.mood === 'angry'
+            ? '😡'
+            : sentiment.mood === 'sad'
+            ? '😢'
+            : sentiment.mood === 'surprised'
+            ? '😲'
+            : sentiment.mood === 'calm'
+            ? '😌'
+            : '✨';
+        const pulseNotice = sentiment.isExcited || sentiment.mood === 'excited' || sentiment.mood === 'happy' ? ' · ❤️ Heart rate surging to 135+ BPM' : '';
+        toast(`${emoji} Tone detected: ${sentiment.label.toUpperCase()} (${Math.round(sentiment.score * 100)}%)${pulseNotice}`, 3400);
+      } else {
+        activeSentimentRef.current = null;
+        setMood('thinking');
+      }
+
+      // Trading bot direct voice/text trigger
+      if (/\b(trading bot|crypto bot|algo bot|open bot|trade bot|trading)\b/i.test(text)) {
+        setTradingBotOpen(true);
+        setMood('excited');
+        const botReply = 'Opening Algorithmic Trading Bot. Core particles synchronized with virtual heart rate and market pulse.';
+        toast(botReply, 4000);
+        speak(botReply, () => {
+          busyRef.current = false;
+        });
+        return;
+      }
 
       // 3D Printer check
       if (/\b(printer|print|3d)\b/i.test(text)) {
@@ -219,6 +347,21 @@ export const App: React.FC = () => {
   );
 
   const startEars = useCallback(() => {
+    audio.ensureCtx();
+
+    // Stream mic input into audio engine analyser for live visual waveform
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => {
+          micStreamRef.current = stream;
+          audio.connectMicStream(stream);
+        })
+        .catch((err) => {
+          console.warn('Microphone stream access not granted for waveform', err);
+        });
+    }
+
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
       toast('SpeechRecognition not supported in this browser.');
@@ -279,6 +422,13 @@ export const App: React.FC = () => {
       } catch (e) {}
       recRef.current = null;
     }
+    if (micStreamRef.current) {
+      try {
+        micStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch (e) {}
+      micStreamRef.current = null;
+    }
+    audio.disconnectMicStream();
     setIsListening(false);
     setMood('idle');
   }, [setMood]);
@@ -347,12 +497,15 @@ export const App: React.FC = () => {
             }
             const px = gestureCoordsRef.current.sx;
             const py = gestureCoordsRef.current.sy;
-            gestureCoordsRef.current.sx += (cx / 80 - gestureCoordsRef.current.sx) * 0.25;
-            gestureCoordsRef.current.sy += (cy / 60 - gestureCoordsRef.current.sy) * 0.25;
+            const smoothRate = gestureSmoothingRef.current;
+            const sens = gestureSensitivityRef.current;
+
+            gestureCoordsRef.current.sx += (cx / 80 - gestureCoordsRef.current.sx) * smoothRate;
+            gestureCoordsRef.current.sy += (cy / 60 - gestureCoordsRef.current.sy) * smoothRate;
 
             if (engineRef.current) {
-              engineRef.current.targetYaw = (gestureCoordsRef.current.sx - 0.5) * 1.5 * 0.62;
-              engineRef.current.targetPitch = (gestureCoordsRef.current.sy - 0.5) * 1.3 * 0.26;
+              engineRef.current.targetYaw = (gestureCoordsRef.current.sx - 0.5) * sens * 0.62;
+              engineRef.current.targetPitch = (gestureCoordsRef.current.sy - 0.5) * sens * 0.26;
             }
             const velocity = Math.min(1, Math.hypot(gestureCoordsRef.current.sx - px, gestureCoordsRef.current.sy - py) * 9);
             if (velocity > 0.12) audio.tick(velocity);
@@ -534,6 +687,11 @@ export const App: React.FC = () => {
         setFps(f);
         setPoints(p);
       };
+      engine.onHeartRateUpdate = (bpm, pulse, phase, elevated) => {
+        setHeartRate(bpm);
+        setHeartPulse(pulse);
+        setIsElevated(elevated);
+      };
       engineRef.current = engine;
 
       let animId: number;
@@ -627,6 +785,20 @@ export const App: React.FC = () => {
       if (e.key === 'c' || e.key === 'C') cycleCharacter();
       if (e.key === 'r' || e.key === 'R') replayAssembly();
       if (e.key === 'b' || e.key === 'B') {
+        setTradingBotOpen((prev) => {
+          const next = !prev;
+          toast(next ? 'Trading Bot Opened' : 'Trading Bot Closed', 1500);
+          return next;
+        });
+      }
+      if (e.key === 'o' || e.key === 'O') {
+        setAgentCompanyOpen((prev) => {
+          const next = !prev;
+          toast(next ? 'Chief of Staff Company Opened' : 'Company Command Closed', 1500);
+          return next;
+        });
+      }
+      if (e.key === 'k' || e.key === 'K') {
         setBgOn((prev) => {
           const next = !prev;
           if (engineRef.current) engineRef.current.bgOn = next;
@@ -670,7 +842,7 @@ export const App: React.FC = () => {
       <div className="veil" />
       <div className="floor" />
 
-      {/* HUD Overlay */}
+      {/* HUD Overlay (Clean view, unobstructing humanoid) */}
       <HudOverlay
         mood={mood}
         fps={fps}
@@ -678,6 +850,17 @@ export const App: React.FC = () => {
         gestureActive={gestureActive}
         gestureCanvasRef={gestureCanvasRef}
         showHint={showHint}
+        themeAccent={THEMES[themeIdx].accent}
+        sentiment={sentimentInfo}
+        heartRate={heartRate}
+        heartPulse={heartPulse}
+        isElevated={isElevated}
+      />
+
+      {/* Visual Audio Waveform Overlay (Reacts to mic input and synthesized voice) */}
+      <AudioWaveform
+        mood={mood}
+        isListening={isListening}
         themeAccent={THEMES[themeIdx].accent}
       />
 
@@ -700,6 +883,8 @@ export const App: React.FC = () => {
         isOpen={menuOpen}
         currentMood={mood}
         onSelectMood={(m) => {
+          activeSentimentRef.current = null;
+          setSentimentInfo(null);
           setMood(m);
           setMenuOpen(false);
         }}
@@ -767,16 +952,77 @@ export const App: React.FC = () => {
             return next;
           });
         }}
+        gestureSmoothing={gestureSmoothing}
+        onChangeGestureSmoothing={setGestureSmoothing}
+        gestureSensitivity={gestureSensitivity}
+        onChangeGestureSensitivity={setGestureSensitivity}
+        onOpenReel={() => {
+          setMenuOpen(false);
+          setReelOpen(true);
+        }}
+        onOpenTradingBot={() => {
+          setMenuOpen(false);
+          setTradingBotOpen(true);
+        }}
+        onOpenAgentCompany={() => {
+          setMenuOpen(false);
+          setAgentCompanyOpen(true);
+        }}
         onClose={() => setMenuOpen(false)}
       />
 
       {/* Notification Toast */}
       <Toast message={toastMessage} />
 
+      {/* Autonomous AI Trading Bot Modal (Auto-Trade & Auto-Analysis) */}
+      <TradingBotModal
+        isOpen={tradingBotOpen}
+        onClose={() => setTradingBotOpen(false)}
+        currentHeartRate={heartRate}
+        pairs={autoTrader.pairs}
+        selectedPairIndex={autoTrader.selectedPairIndex}
+        onSelectPairIndex={autoTrader.setSelectedPairIndex}
+        autoTrading={autoTrader.autoTrading}
+        onToggleAutoTrading={() => autoTrader.setAutoTrading((v) => !v)}
+        balance={autoTrader.balance}
+        positions={autoTrader.positions}
+        tradeLogs={autoTrader.tradeLogs}
+        analysisFeed={autoTrader.analysisFeed}
+        strategy={autoTrader.strategy}
+        onChangeStrategy={autoTrader.setStrategy}
+        onManualBuy={autoTrader.manualBuy}
+        onManualSell={autoTrader.manualSell}
+        onTriggerSentimentTrade={handleTriggerSentimentTrade}
+      />
+
       {/* YouTube Shorts & Content Studio Modal */}
       <YouTubeModal
         isOpen={youtubeOpen}
         onClose={() => setYoutubeOpen(false)}
+        onToast={toast}
+      />
+
+      {/* Instagram Reel Showcase Modal */}
+      <ReelModal
+        isOpen={reelOpen}
+        onClose={() => setReelOpen(false)}
+        onSelectTopicForShorts={(suggestedTopic) => {
+          setYoutubeOpen(true);
+        }}
+        onOpenAgentCompany={() => {
+          setReelOpen(false);
+          setAgentCompanyOpen(true);
+        }}
+        onToast={toast}
+      />
+
+      {/* Chief of Staff & Multi-Agent AI Company Command Center */}
+      <AgentCompanyModal
+        isOpen={agentCompanyOpen}
+        onClose={() => setAgentCompanyOpen(false)}
+        onSelectTopicForShorts={(suggestedTopic) => {
+          setYoutubeOpen(true);
+        }}
         onToast={toast}
       />
 

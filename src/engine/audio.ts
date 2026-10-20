@@ -1,6 +1,6 @@
-// Synthesized audio engine: ambient drone + live procedural sound effects (SFX)
+// Synthesized audio engine: ambient drone + live procedural sound effects (SFX) + dual mic/voice waveform analyzer
 class AudioEngine {
-  private actx: AudioContext | null = null;
+  public actx: AudioContext | null = null;
   private master: GainNode | null = null;
   private sfxBus: GainNode | null = null;
   private nodes: (OscillatorNode | AudioBufferSourceNode)[] = [];
@@ -12,6 +12,11 @@ class AudioEngine {
   public audioEl: HTMLAudioElement | null = null;
   public rmsBuf: Float32Array = new Float32Array(512);
 
+  // Mic stream source node for user voice visualization
+  private micSource: MediaStreamAudioSourceNode | null = null;
+  private synthVoiceOsc: OscillatorNode | null = null;
+  private synthVoiceGain: GainNode | null = null;
+
   public ensureCtx(): AudioContext | null {
     if (this.actx) {
       if (this.actx.state === 'suspended') {
@@ -22,15 +27,71 @@ class AudioEngine {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
     if (!AC) return null;
     this.actx = new AC();
+
+    this.analyser = this.actx.createAnalyser();
+    this.analyser.fftSize = 512;
+    this.analyser.smoothingTimeConstant = 0.82;
+
     this.master = this.actx.createGain();
     this.master.gain.value = 0.0;
     this.master.connect(this.actx.destination);
+    this.master.connect(this.analyser);
 
     this.sfxBus = this.actx.createGain();
     this.sfxBus.gain.value = this.sfxOn ? 0.85 : 0.0;
     this.sfxBus.connect(this.actx.destination);
+    this.sfxBus.connect(this.analyser);
+
+    // Subtle silent sub-carrier to feed synthesizer voice activity envelope into analyser
+    try {
+      this.synthVoiceGain = this.actx.createGain();
+      this.synthVoiceGain.gain.value = 0.0;
+      this.synthVoiceOsc = this.actx.createOscillator();
+      this.synthVoiceOsc.type = 'triangle';
+      this.synthVoiceOsc.frequency.value = 160;
+      this.synthVoiceOsc.connect(this.synthVoiceGain);
+      // Connect to analyser only (not destination) so it generates waveform data without speaker audio
+      this.synthVoiceGain.connect(this.analyser);
+      this.synthVoiceOsc.start();
+    } catch (e) {}
 
     return this.actx;
+  }
+
+  public connectMicStream(stream: MediaStream) {
+    this.ensureCtx();
+    if (!this.actx || !this.analyser) return;
+
+    try {
+      if (this.micSource) {
+        this.micSource.disconnect();
+      }
+      const micSource = this.actx.createMediaStreamSource(stream);
+      // Connect to analyser only (NOT to destination) to avoid feedback howl!
+      micSource.connect(this.analyser);
+      this.micSource = micSource;
+    } catch (e) {
+      console.warn('Could not connect mic to audio analyzer', e);
+    }
+  }
+
+  public disconnectMicStream() {
+    if (this.micSource) {
+      try {
+        this.micSource.disconnect();
+      } catch (e) {}
+      this.micSource = null;
+    }
+  }
+
+  public triggerVoicePulse(amplitude: number = 0.8) {
+    if (!this.actx || !this.synthVoiceGain) return;
+    try {
+      const t = this.actx.currentTime;
+      this.synthVoiceGain.gain.cancelScheduledValues(t);
+      this.synthVoiceGain.gain.setValueAtTime(amplitude * 0.7, t);
+      this.synthVoiceGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    } catch (e) {}
   }
 
   public buildAmbient() {
@@ -192,9 +253,39 @@ class AudioEngine {
     } else if (m === 'speaking') {
       this.tone({ freq: 220, to: 440, dur: 0.18, type: 'sawtooth', gain: 0.055 });
       this.tone({ freq: 880, to: 1320, dur: 0.16, gain: 0.05, delay: 0.06 });
+    } else if (m === 'happy') {
+      this.tone({ freq: 523, to: 659, dur: 0.14, type: 'sine', gain: 0.08 });
+      this.tone({ freq: 784, to: 1046, dur: 0.18, type: 'triangle', gain: 0.06, delay: 0.08 });
+    } else if (m === 'excited') {
+      this.tone({ freq: 587, to: 880, dur: 0.12, type: 'sine', gain: 0.085 });
+      this.tone({ freq: 880, to: 1320, dur: 0.14, type: 'triangle', gain: 0.07, delay: 0.06 });
+      this.tone({ freq: 1760, dur: 0.16, type: 'sine', gain: 0.045, delay: 0.12 });
+    } else if (m === 'angry') {
+      this.tone({ freq: 180, to: 110, dur: 0.22, type: 'sawtooth', gain: 0.09 });
+      this.tone({ freq: 360, to: 180, dur: 0.16, type: 'square', gain: 0.04, delay: 0.04 });
+    } else if (m === 'sad') {
+      this.tone({ freq: 440, to: 349, dur: 0.32, type: 'sine', gain: 0.07 });
+      this.tone({ freq: 261, dur: 0.28, type: 'triangle', gain: 0.05, delay: 0.1 });
+    } else if (m === 'surprised') {
+      this.tone({ freq: 660, to: 1320, dur: 0.15, type: 'sine', gain: 0.09 });
+      this.tone({ freq: 1760, dur: 0.1, type: 'triangle', gain: 0.05, delay: 0.08 });
+    } else if (m === 'calm') {
+      this.tone({ freq: 432, dur: 0.38, type: 'sine', gain: 0.06 });
+      this.tone({ freq: 648, dur: 0.32, type: 'sine', gain: 0.035, delay: 0.1 });
+    } else if (m === 'neutral') {
+      this.tone({ freq: 520, to: 480, dur: 0.18, type: 'sine', gain: 0.05 });
     } else {
       this.tone({ freq: 560, to: 300, dur: 0.2, gain: 0.07 });
     }
+  }
+
+  public heartThump(elevated = false) {
+    if (!this.actx) return;
+    const gain = elevated ? 0.075 : 0.04;
+    // Systolic S1 "lub"
+    this.tone({ freq: elevated ? 68 : 52, to: 40, dur: 0.07, type: 'sine', gain });
+    // Diastolic S2 "dub"
+    this.tone({ freq: elevated ? 76 : 58, to: 45, dur: 0.05, type: 'sine', gain: gain * 0.75, delay: 0.1 });
   }
 
   public whoosh() {

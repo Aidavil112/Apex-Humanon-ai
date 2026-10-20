@@ -97,9 +97,128 @@ export const MOODS: Record<MoodType, MoodConfig> = {
   listening: { core: [0.3, 0.82, 1.0], amt: 1.25, label: 'listening' },
   thinking: { core: [1.0, 0.7, 0.16], amt: 1.55, label: 'thinking' },
   speaking: { core: [1.0, 0.42, 0.22], amt: 1.45, label: 'speaking' },
+  happy: { core: [1.0, 0.84, 0.15], amt: 1.7, label: 'happy' },
+  excited: { core: [1.0, 0.38, 0.08], amt: 2.25, label: 'excited' },
+  sad: { core: [0.22, 0.38, 0.98], amt: 0.62, label: 'sad' },
+  angry: { core: [1.0, 0.12, 0.08], amt: 2.15, label: 'angry' },
+  surprised: { core: [0.94, 0.22, 1.0], amt: 1.9, label: 'surprised' },
+  calm: { core: [0.15, 0.95, 0.68], amt: 0.95, label: 'calm' },
+  neutral: { core: [0.68, 0.82, 0.98], amt: 1.0, label: 'neutral' },
 };
 
+interface BurstParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  size: number;
+  color: [number, number, number];
+  type: 'BUY' | 'SELL';
+}
+
+interface TradeBurstAnnouncement {
+  text: string;
+  subtext: string;
+  type: 'BUY' | 'SELL';
+  life: number;
+  maxLife: number;
+  y: number;
+}
+
+interface BurstRing {
+  x: number;
+  y: number;
+  radius: number;
+  maxRadius: number;
+  life: number;
+  maxLife: number;
+  color: string;
+}
+
 export class WebGLEngine {
+  // Particle-Burst Animation Engine (Auto-Trader Buy/Sell Execution)
+  private burstParticles: BurstParticle[] = [];
+  private burstRings: BurstRing[] = [];
+  private burstAnnouncements: TradeBurstAnnouncement[] = [];
+
+  public triggerTradeBurst(type: 'BUY' | 'SELL', details?: { pair?: string; price?: number; profit?: number }) {
+    const w = this.hudCanvas.width;
+    const h = this.hudCanvas.height;
+    const isMobile = w < h;
+    const cx = w * 0.5;
+    const cy = h * (isMobile ? 0.34 : 0.36);
+
+    // Dynamic core pulse excitation in 3D WebGL
+    this.heartPulse = 1.0;
+    this.voiceTarget = 1.0;
+
+    const count = isMobile ? 85 : 120;
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = (Math.random() * 320 + 90) * (isMobile ? 0.85 : 1.0);
+      const spreadY = type === 'BUY' ? -0.42 : -0.15;
+      const maxLife = Math.random() * 0.75 + 0.95;
+
+      const pCol: [number, number, number] =
+        type === 'BUY'
+          ? Math.random() > 0.3
+            ? [0.0, 0.96, 0.62]
+            : [0.0, 0.88, 1.0]
+          : Math.random() > 0.35
+          ? [1.0, 0.82, 0.22]
+          : [1.0, 0.32, 0.18];
+
+      this.burstParticles.push({
+        x: cx + (Math.random() - 0.5) * 20,
+        y: cy + (Math.random() - 0.5) * 20,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed + spreadY * speed,
+        life: 0,
+        maxLife,
+        size: Math.random() * 4.2 + 2.2,
+        color: pCol,
+        type,
+      });
+    }
+
+    // Concentric expanding shockwave rings
+    const ringColor = type === 'BUY' ? 'rgba(0, 245, 160, 0.85)' : 'rgba(255, 175, 40, 0.85)';
+    this.burstRings.push({
+      x: cx,
+      y: cy,
+      radius: 18,
+      maxRadius: Math.min(w, h) * (isMobile ? 0.38 : 0.32),
+      life: 0,
+      maxLife: 1.1,
+      color: ringColor,
+    });
+    this.burstRings.push({
+      x: cx,
+      y: cy,
+      radius: 8,
+      maxRadius: Math.min(w, h) * (isMobile ? 0.52 : 0.44),
+      life: 0.15,
+      maxLife: 1.3,
+      color: ringColor,
+    });
+
+    const label =
+      type === 'BUY'
+        ? `▲ AUTO BUY ${details?.pair || ''}`
+        : `▼ PROFIT SECURED +$${details?.profit ? Math.round(details.profit) : '210'}`;
+    const sub = details?.price ? `@ $${details.price.toLocaleString()}` : 'ALGO SIGNAL';
+
+    this.burstAnnouncements.push({
+      text: label,
+      subtext: sub,
+      type,
+      life: 0,
+      maxLife: 1.7,
+      y: cy - 42,
+    });
+  }
   private gl: WebGL2RenderingContext;
   private canvas: HTMLCanvasElement;
   private hudCanvas: HTMLCanvasElement;
@@ -146,6 +265,13 @@ export class WebGLEngine {
 
   public voiceEnv: number = 0;
   public voiceTarget: number = 0;
+
+  // Virtual Cardiac Rhythm & Pulse Engine
+  public heartRate: number = 72;
+  public targetHeartRate: number = 72;
+  public heartPulse: number = 0;
+  public heartPhase: number = 0;
+  public onHeartRateUpdate?: (bpm: number, pulse: number, phase: number, isElevated: boolean) => void;
 
   private t0: number = performance.now();
   private lastTime: number = performance.now();
@@ -199,7 +325,7 @@ export class WebGLEngine {
     layout(location=6) in float aSize;
 
     uniform mat4 uViewProj;
-    uniform float uTime, uYaw, uPitch, uCoreAmt, uAssemble, uFocal, uDpr, uDensity;
+    uniform float uTime, uYaw, uPitch, uCoreAmt, uAssemble, uFocal, uDpr, uDensity, uHeartPulse;
     uniform vec3 uCoreCol;
     uniform vec3 uAccent;
     out vec3 vCol;
@@ -240,10 +366,10 @@ export class WebGLEngine {
 
       float dc = length((p - vec3(0.0, 1.19, 0.05)) * vec3(1.0, 0.95, 0.55));
       float glow = exp(-dc*dc*9.0) * uCoreAmt;
-      col += uCoreCol * glow * 0.26;
+      col += uCoreCol * glow * 0.26 * (1.0 + 0.50*uHeartPulse);
 
       float warm = exp(-pow(p.x/0.19,2.0)) * exp(-pow((p.y-0.62)/0.46,2.0)) * smoothstep(-0.2,0.9,n.z);
-      col += uCoreCol * warm * (0.16 + 0.20*uCoreAmt);
+      col += uCoreCol * warm * (0.16 + 0.20*uCoreAmt) * (1.0 + 0.65*uHeartPulse);
 
       float size = aSize;
 
@@ -260,12 +386,14 @@ export class WebGLEngine {
         size *= 1.7;
       } else if (aType > 2.5){
         float breathe = 0.7 + 0.3*sin(t*1.3 + aSeed*7.0);
-        col = uCoreCol * 0.008 * breathe * (0.5 + uCoreAmt*0.6);
+        col = uCoreCol * 0.008 * breathe * (0.5 + uCoreAmt*0.6) * (1.0 + 0.75*uHeartPulse);
+        size *= (1.0 + 0.30*uHeartPulse);
       } else if (aType > 0.5 && aType < 1.5){
+        // Core cluster particles pulsating in direct synchrony with virtual heart rate
         float pulse = 0.5 + 0.5*sin(t*2.1 + aSeed*11.0);
         float fall = 0.45 + 0.55*(1.0 - smoothstep(0.05, 0.20, length(p - vec3(0.0, 1.18, -0.02))));
-        col = uCoreCol * (0.10 + 0.30*pulse) * (0.35 + 0.65*uCoreAmt) * fall;
-        size *= 1.55;
+        col = uCoreCol * (0.10 + 0.30*pulse + 0.85*uHeartPulse) * (0.35 + 0.65*uCoreAmt) * fall;
+        size *= 1.55 * (1.0 + 0.70*uHeartPulse);
       } else if (aType > 1.5){
         float tw = pow(0.5+0.5*sin(t*1.4 + aSeed*90.0), 6.0);
         col = cyan * (0.05 + 0.85*tw);
@@ -322,6 +450,7 @@ export class WebGLEngine {
       'uDensity',
       'uCoreCol',
       'uAccent',
+      'uHeartPulse',
     ].forEach((k) => (this.U[k] = gl.getUniformLocation(prog, k)!));
   }
 
@@ -862,14 +991,15 @@ export class WebGLEngine {
     this.count = this.aPos.length / 3;
   }
 
-  private drawHud(now: number, accent: number[]) {
+  private drawHud(now: number, accent: number[], dt: number) {
     const w = this.hudCanvas.width,
       h = this.hudCanvas.height;
+    const isMobile = w < h;
     const hctx = this.hctx;
     hctx.clearRect(0, 0, w, h);
     const cx = w * 0.5,
-      cy = h * 0.42,
-      R = Math.min(w, h) * 0.3;
+      cy = h * (isMobile ? 0.34 : 0.36),
+      R = Math.min(w, h) * (isMobile ? 0.23 : 0.22);
     const col = `rgb(${accent.map((v) => Math.round(v * 255)).join(',')})`;
     hctx.lineWidth = 1.2;
     hctx.strokeStyle = col;
@@ -911,6 +1041,120 @@ export class WebGLEngine {
     grd.addColorStop(1, col);
     hctx.fillStyle = grd;
     hctx.fillRect(0, gy - 40, w, 50);
+
+    // Render Shockwave Rings (Auto-Trader Buy/Sell Execution)
+    if (this.burstRings.length > 0) {
+      hctx.save();
+      for (let i = this.burstRings.length - 1; i >= 0; i--) {
+        const ring = this.burstRings[i];
+        ring.life += dt;
+        if (ring.life >= ring.maxLife) {
+          this.burstRings.splice(i, 1);
+          continue;
+        }
+        const progress = ring.life / ring.maxLife;
+        const currentR = ring.radius + (ring.maxRadius - ring.radius) * Math.sin(progress * Math.PI * 0.5);
+        const alpha = Math.max(0, (1 - progress) * 0.82);
+
+        hctx.beginPath();
+        hctx.arc(ring.x, ring.y, currentR, 0, Math.PI * 2);
+        hctx.strokeStyle = ring.color;
+        hctx.globalAlpha = alpha;
+        hctx.lineWidth = Math.max(1.2, 3.5 * (1 - progress));
+        hctx.shadowColor = ring.color;
+        hctx.shadowBlur = 12;
+        hctx.setLineDash([16, 8]);
+        hctx.stroke();
+      }
+      hctx.restore();
+    }
+
+    // Render Particle Burst Overlay (Auto-Trader Buy/Sell Execution)
+    if (this.burstParticles.length > 0) {
+      hctx.save();
+      for (let i = this.burstParticles.length - 1; i >= 0; i--) {
+        const p = this.burstParticles[i];
+        p.life += dt;
+        if (p.life >= p.maxLife) {
+          this.burstParticles.splice(i, 1);
+          continue;
+        }
+
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= 0.955;
+        p.vy *= 0.955;
+        p.vy += (p.type === 'BUY' ? 45 : 75) * dt;
+
+        const progress = p.life / p.maxLife;
+        const alpha = Math.max(0, (1 - progress) * 0.9);
+        const radius = p.size * (1 - progress * 0.35);
+
+        const [r, g, b] = p.color.map((v) => Math.round(v * 255));
+        hctx.beginPath();
+        hctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        hctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        hctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        hctx.shadowBlur = 8;
+        hctx.fill();
+
+        // High-velocity spark trail
+        hctx.beginPath();
+        hctx.moveTo(p.x, p.y);
+        hctx.lineTo(p.x - p.vx * 0.032, p.y - p.vy * 0.032);
+        hctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alpha * 0.5})`;
+        hctx.lineWidth = 1;
+        hctx.stroke();
+      }
+      hctx.restore();
+    }
+
+    // Render Floating Trade Burst Badge Announcements
+    if (this.burstAnnouncements.length > 0) {
+      hctx.save();
+      for (let i = this.burstAnnouncements.length - 1; i >= 0; i--) {
+        const a = this.burstAnnouncements[i];
+        a.life += dt;
+        if (a.life >= a.maxLife) {
+          this.burstAnnouncements.splice(i, 1);
+          continue;
+        }
+
+        const progress = a.life / a.maxLife;
+        a.y -= dt * 26; // subtle float upward
+        const alpha = Math.sin(progress * Math.PI) * 0.95;
+
+        const isBuy = a.type === 'BUY';
+        const color = isBuy ? '#00f5a0' : '#ffd13b';
+        const border = isBuy ? 'rgba(0, 245, 160, 0.45)' : 'rgba(255, 209, 59, 0.45)';
+        const bg = 'rgba(4, 14, 22, 0.88)';
+
+        hctx.font = 'bold 11px monospace';
+        const textW = hctx.measureText(a.text).width;
+        const boxW = textW + 28;
+        const boxH = 25;
+        const bx = cx - boxW / 2;
+        const by = a.y;
+
+        hctx.globalAlpha = alpha;
+        hctx.fillStyle = bg;
+        hctx.beginPath();
+        hctx.roundRect(bx, by, boxW, boxH, 6);
+        hctx.fill();
+
+        hctx.strokeStyle = border;
+        hctx.lineWidth = 1.2;
+        hctx.shadowColor = color;
+        hctx.shadowBlur = 8;
+        hctx.stroke();
+        hctx.shadowBlur = 0;
+
+        hctx.fillStyle = color;
+        hctx.fillText(a.text, bx + 14, by + 17);
+      }
+      hctx.restore();
+    }
+
     hctx.globalAlpha = 1;
   }
 
@@ -1018,17 +1262,73 @@ export class WebGLEngine {
     this.voiceTarget *= Math.exp(-dt * 5.5);
     this.voiceEnv += (this.voiceTarget - this.voiceEnv) * Math.min(1, dt * 11);
 
+    // Dynamic Virtual Heart Rate Engine
+    if (this.mood === 'excited') {
+      this.targetHeartRate = 138;
+    } else if (this.mood === 'happy') {
+      this.targetHeartRate = 126;
+    } else if (this.mood === 'angry') {
+      this.targetHeartRate = 128;
+    } else if (this.mood === 'surprised') {
+      this.targetHeartRate = 114;
+    } else if (this.mood === 'speaking') {
+      this.targetHeartRate = 88;
+    } else if (this.mood === 'thinking') {
+      this.targetHeartRate = 82;
+    } else if (this.mood === 'listening') {
+      this.targetHeartRate = 78;
+    } else if (this.mood === 'calm') {
+      this.targetHeartRate = 60;
+    } else if (this.mood === 'sad') {
+      this.targetHeartRate = 54;
+    } else {
+      this.targetHeartRate = 70;
+    }
+
+    // Smooth lerp heart rate
+    this.heartRate += (this.targetHeartRate - this.heartRate) * Math.min(1, dt * 2.2);
+
+    // Cardiac cycle phase
+    const bps = this.heartRate / 60.0;
+    this.heartPhase = (this.heartPhase + dt * bps) % 1.0;
+
+    // Dual-peak cardiac contraction (Systolic QRS spike + Diastolic dicrotic rebound)
+    const p1 = Math.exp(-Math.pow((this.heartPhase - 0.08) / 0.042, 2.0));
+    const p2 = 0.45 * Math.exp(-Math.pow((this.heartPhase - 0.28) / 0.065, 2.0));
+    let rawPulse = Math.min(1.0, p1 + p2);
+
+    // Stronger pulse amplitude when excited or happy sentiments occur
+    if (this.mood === 'excited' || this.mood === 'happy') {
+      rawPulse = Math.min(1.0, rawPulse * 1.35);
+    }
+    this.heartPulse = rawPulse;
+
     let amt = this.curAmt;
     if (this.mood === 'speaking') {
       amt *= 0.55 + 0.95 * this.voiceEnv;
       amt *= 0.72 + 0.5 * (0.5 + 0.5 * Math.sin(t * 9.0)) * (0.6 + 0.4 * Math.sin(t * 3.1 + 1.2));
-    }
-    if (this.mood === 'listening') {
+    } else if (this.mood === 'listening') {
       amt *= 1.0 + 0.35 * Math.sin(t * 2.2) * Math.sin(t * 0.7);
+    } else if (this.mood === 'angry') {
+      amt *= 1.0 + 0.45 * Math.sin(t * 14.0) * Math.sin(t * 5.5);
+    } else if (this.mood === 'excited') {
+      amt *= 1.0 + 0.45 * this.heartPulse + 0.25 * Math.sin(t * 8.0);
+    } else if (this.mood === 'happy') {
+      amt *= 1.0 + 0.38 * this.heartPulse + 0.20 * Math.sin(t * 5.0);
+    } else if (this.mood === 'surprised') {
+      amt *= 1.0 + 0.38 * Math.sin(t * 10.0);
+    } else if (this.mood === 'sad') {
+      amt *= 0.85 + 0.15 * Math.sin(t * 1.2);
+    } else if (this.mood === 'calm') {
+      amt *= 0.95 + 0.1 * Math.sin(t * 1.5);
     }
 
+    const isMobile = this.canvas.width < this.canvas.height;
     const proj = this.perspective((50 * Math.PI) / 180, this.canvas.width / this.canvas.height, 0.1, 40);
-    const view = this.lookAt([0, 0.06, 2.72], [0, 0.42, 0], [0, 1, 0]);
+    // Lowered humanoid head position so it floats cleanly in upper-mid canvas without colliding with top header
+    const view = isMobile
+      ? this.lookAt([0, 0.70, 3.32], [0, 0.64, 0], [0, 1, 0])
+      : this.lookAt([0, 0.50, 2.92], [0, 0.52, 0], [0, 1, 0]);
     const vp = this.mul(proj, view);
 
     const gl = this.gl;
@@ -1060,6 +1360,7 @@ export class WebGLEngine {
       gl.uniform1f(this.U.uYaw, this.yaw);
       gl.uniform1f(this.U.uPitch, this.pitch);
       gl.uniform1f(this.U.uCoreAmt, amt);
+      gl.uniform1f(this.U.uHeartPulse, this.heartPulse);
       gl.uniform1f(this.U.uAssemble, this.assemble);
       gl.uniform1f(this.U.uDpr, dpr);
       gl.uniform1f(this.U.uDensity, this.density);
@@ -1069,7 +1370,14 @@ export class WebGLEngine {
       gl.drawArrays(gl.POINTS, 0, this.count);
     }
 
-    this.drawHud(now, this.accentCur);
+    this.drawHud(now, this.accentCur, dt);
+
+    this.onHeartRateUpdate?.(
+      Math.round(this.heartRate),
+      this.heartPulse,
+      this.heartPhase,
+      this.heartRate > 105
+    );
 
     this.frames++;
     if (now - this.fpsT > 500) {
