@@ -8,8 +8,7 @@ interface ReelModalProps {
   onToast: (msg: string) => void;
 }
 
-const DEFAULT_REEL_URL = 'https://www.instagram.com/reel/DeZfiXZqJtP/?dlrf=MWtxNHl5dGh4bDdsNA==';
-const DEFAULT_REEL_ID = 'DeZfiXZqJtP';
+const DEFAULT_REEL_URL = 'https://www.facebook.com/share/r/1CsnV4FJGt/?mibextid=wwXIfr';
 
 export const ReelModal: React.FC<ReelModalProps> = ({
   isOpen,
@@ -19,42 +18,49 @@ export const ReelModal: React.FC<ReelModalProps> = ({
   onToast,
 }) => {
   const [reelUrl, setReelUrl] = useState(DEFAULT_REEL_URL);
-  const [activeReelId, setActiveReelId] = useState(DEFAULT_REEL_ID);
+  const [activeUrl, setActiveUrl] = useState(DEFAULT_REEL_URL);
 
   if (!isOpen) return null;
 
-  const extractReelId = (url: string): string => {
+  const isFacebook = /facebook\.com|fb\.watch/i.test(activeUrl);
+
+  const extractInstaId = (url: string): string => {
     const match = url.match(/(?:reel|p)\/([A-Za-z0-9_-]+)/);
-    return match ? match[1] : DEFAULT_REEL_ID;
+    return match ? match[1] : 'DeZfiXZqJtP';
   };
 
   const handleUpdateReel = (e: React.FormEvent) => {
     e.preventDefault();
-    const id = extractReelId(reelUrl);
-    setActiveReelId(id);
-    onToast(`Loaded Reel: ${id}`);
+    const clean = reelUrl.trim();
+    if (!clean) return;
+    setActiveUrl(clean);
+    onToast(`Loaded ${/facebook|fb/i.test(clean) ? 'Facebook' : 'Instagram'} Reel!`);
   };
 
   const handleConvertToShort = () => {
     const topicSuggestion = 'AI Chief of Staff and 19 Sub-Agents Running My Company';
     onSelectTopicForShorts(topicSuggestion);
     onClose();
-    onToast(`Reel loaded into YouTube Short Agent: "${topicSuggestion}"`);
+    onToast(`Reel topic loaded into YouTube Content Agent: "${topicSuggestion}"`);
   };
+
+  const embedSrc = isFacebook
+    ? `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(activeUrl)}&show_text=false&width=500`
+    : `https://www.instagram.com/p/${extractInstaId(activeUrl)}/embed/captioned/`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-[#04090ecc] backdrop-blur-md overflow-y-auto font-mono text-[#d8f2ff]">
-      <div className="w-full max-w-[520px] bg-[#07131d] border border-[rgba(79,210,255,0.28)] rounded-2xl p-5 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.95)] max-h-[92vh] overflow-y-auto">
+      <div className="w-full max-w-[540px] bg-[#07131d] border border-[rgba(79,210,255,0.28)] rounded-2xl p-5 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.95)] max-h-[92vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between pb-3.5 border-b border-[rgba(79,210,255,0.14)] mb-4">
           <div className="flex items-center gap-2">
-            <span className="text-xl">📸</span>
+            <span className="text-xl">{isFacebook ? '📘' : '📸'}</span>
             <div>
               <div className="text-[13px] tracking-[0.2em] text-[#ff6495] font-semibold uppercase">
-                INSTAGRAM REEL VIEWER
+                {isFacebook ? 'FACEBOOK REEL VIEWER' : 'INSTAGRAM REEL VIEWER'}
               </div>
               <div className="text-[10px] text-[#55829e] tracking-wider">
-                Watch Reel · Study Viral Dynamics · Remix into YouTube Short
+                Watch Reel · Viral Sentiment Analysis · Remix into YouTube Short
               </div>
             </div>
           </div>
@@ -66,13 +72,13 @@ export const ReelModal: React.FC<ReelModalProps> = ({
           </button>
         </div>
 
-        {/* Input for custom or current reel */}
+        {/* Input for custom Facebook or Instagram reel */}
         <form onSubmit={handleUpdateReel} className="flex gap-2 mb-4">
           <input
             type="text"
             value={reelUrl}
             onChange={(e) => setReelUrl(e.target.value)}
-            placeholder="Paste Instagram Reel URL…"
+            placeholder="Paste Facebook or Instagram Reel URL…"
             className="flex-1 bg-[#0a151d] border border-[#1d3a4d] rounded-xl p-2.5 text-xs text-[#eaf9ff] focus:outline-none focus:border-[#ff6495]"
           />
           <button
@@ -83,12 +89,13 @@ export const ReelModal: React.FC<ReelModalProps> = ({
           </button>
         </form>
 
-        {/* Embedded Instagram Reel Frame */}
+        {/* Embedded Facebook / Instagram Reel Frame */}
         <div className="relative w-full aspect-[9/14] sm:aspect-[9/13] max-h-[460px] bg-[#020508] border border-[rgba(79,210,255,0.2)] rounded-xl overflow-hidden mb-4 shadow-inner flex flex-col items-center justify-center">
           <iframe
-            src={`https://www.instagram.com/p/${activeReelId}/embed/captioned/`}
+            src={embedSrc}
             className="w-full h-full border-0 rounded-xl"
-            title="Instagram Reel"
+            title={isFacebook ? 'Facebook Reel' : 'Instagram Reel'}
+            allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"
             allowFullScreen
           />
         </div>
@@ -111,12 +118,16 @@ export const ReelModal: React.FC<ReelModalProps> = ({
 
           <div className="flex flex-col sm:flex-row gap-2.5">
             <a
-              href={reelUrl}
+              href={activeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex-1 cursor-pointer text-center bg-gradient-to-r from-[#833ab4] via-[#fd1d1d] to-[#fcb045] text-white py-3 rounded-xl font-bold text-xs tracking-wider shadow-md hover:brightness-110 transition-all"
+              className={`flex-1 cursor-pointer text-center text-white py-3 rounded-xl font-bold text-xs tracking-wider shadow-md hover:brightness-110 transition-all ${
+                isFacebook
+                  ? 'bg-gradient-to-r from-[#1877f2] to-[#0d5abe]'
+                  : 'bg-gradient-to-r from-[#833ab4] via-[#fd1d1d] to-[#fcb045]'
+              }`}
             >
-              ↗ Open in Instagram App
+              ↗ Open in {isFacebook ? 'Facebook App' : 'Instagram App'}
             </a>
 
             <button
