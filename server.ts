@@ -1081,8 +1081,57 @@ app.get('/api/coindcx/ticker', async (req: Request, res: Response) => {
   return res.json({ ok: true, source: 'fallback_live_sim', data: fallback });
 });
 
+app.post('/api/coindcx/balances', async (req: Request, res: Response) => {
+  res.setHeader('cache-control', 'no-store');
+  const key = String(req.body?.apiKey || COINDCX_KEY || '').trim();
+  const secret = String(req.body?.apiSecret || COINDCX_SECRET || '').trim();
+
+  if (key && secret && key.length > 5) {
+    try {
+      const payload = { timestamp: Math.floor(Date.now()) };
+      const jsonBody = JSON.stringify(payload);
+      const signature = crypto.createHmac('sha256', secret).update(jsonBody).digest('hex');
+
+      const liveRes = await fetch(`${COINDCX_BASE_URL}/exchange/v1/users/balances`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-AUTH-APIKEY': key,
+          'X-AUTH-SIGNATURE': signature,
+        },
+        body: jsonBody,
+      });
+
+      if (liveRes.ok) {
+        const balancesArr: any[] = await liveRes.json();
+        return res.json({
+          ok: true,
+          live: true,
+          balances: balancesArr,
+          timestamp: Date.now(),
+        });
+      }
+    } catch (e: any) {
+      // Fallback to sandbox balance
+    }
+  }
+
+  return res.json({
+    ok: true,
+    live: false,
+    simulated: true,
+    balances: [
+      { currency: 'INR', balance: '128450.00', locked_balance: '0.00' },
+      { currency: 'USDT', balance: '1540.25', locked_balance: '0.00' },
+      { currency: 'BTC', balance: '0.0845', locked_balance: '0.00' },
+      { currency: 'ETH', balance: '1.240', locked_balance: '0.00' },
+    ],
+    timestamp: Date.now(),
+  });
+});
+
 app.post('/api/coindcx/trade', async (req: Request, res: Response) => {
-  const { market, side, price, quantity, order_type = 'market_order' } = req.body || {};
+  const { market, side, price, quantity, order_type = 'market_order', apiKey, apiSecret } = req.body || {};
   if (!market || !side || !quantity) {
     return res.status(400).json({ error: 'market, side, and quantity are required' });
   }
@@ -1092,8 +1141,11 @@ app.post('/api/coindcx/trade', async (req: Request, res: Response) => {
   const safeQty = parseFloat(String(quantity)) || 0.01;
   const safePrice = parseFloat(String(price)) || 0;
 
+  const key = String(apiKey || COINDCX_KEY || '').trim();
+  const secret = String(apiSecret || COINDCX_SECRET || '').trim();
+
   // Real CoinDCX Authenticated Order Execution if keys are present
-  if (COINDCX_KEY && COINDCX_SECRET && COINDCX_KEY.length > 5) {
+  if (key && secret && key.length > 5) {
     try {
       const bodyPayload = {
         side: safeSide,
@@ -1104,13 +1156,13 @@ app.post('/api/coindcx/trade', async (req: Request, res: Response) => {
         timestamp: Math.floor(Date.now()),
       };
       const jsonBody = JSON.stringify(bodyPayload);
-      const signature = crypto.createHmac('sha256', COINDCX_SECRET).update(jsonBody).digest('hex');
+      const signature = crypto.createHmac('sha256', secret).update(jsonBody).digest('hex');
 
       const liveRes = await fetch(`${COINDCX_BASE_URL}/exchange/v1/orders/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-AUTH-APIKEY': COINDCX_KEY,
+          'X-AUTH-APIKEY': key,
           'X-AUTH-SIGNATURE': signature,
         },
         body: jsonBody,
@@ -1153,12 +1205,14 @@ app.post('/api/coindcx/trade', async (req: Request, res: Response) => {
     quantity: safeQty,
     status: 'FILLED_SANDBOX',
     timestamp: Date.now(),
-    message: 'Simulated execution matching CoinDCX live book. (Add COINDCX_API_KEY & COINDCX_API_SECRET in server env for real order routing)',
+    message: 'Simulated execution matching CoinDCX live book. (Add COINDCX API Key & Secret for real money execution)',
   });
 });
 
 /* --- Vite / SPA Integration --- */
 async function startServer() {
+  console.log(`🚀 Starting APEX Humanoid Server... Environment: PORT=${PORT}, NODE_ENV=${process.env.NODE_ENV}`);
+
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -1167,15 +1221,22 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    const distPath = path.resolve(__dirname, 'dist');
+    app.use(express.static(distPath));
     app.get('*', (req: Request, res: Response) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      const indexPath = path.resolve(distPath, 'index.html');
+      res.sendFile(indexPath, (err) => {
+        if (err && !res.headersSent) {
+          res.status(200).send(`<!DOCTYPE html><html><head><title>APEX Humanoid</title></head><body style="background:#0a0c10;color:#fff;font-family:sans-serif;display:grid;place-content:center;height:100vh;"><h2>APEX Humanoid Service Active</h2><p>Server running on port ${PORT}.</p></body></html>`);
+        }
+      });
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 APEX Humanoid full-stack server running on http://0.0.0.0:${PORT}`);
+    console.log(`✅ APEX Humanoid full-stack server successfully listening on http://0.0.0.0:${PORT}`);
   });
 }
 
 startServer();
+

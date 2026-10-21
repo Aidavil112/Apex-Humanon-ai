@@ -892,7 +892,7 @@ export class WebGLEngine {
     const HEAD = cfg.head || { cx: 0, cy: 1.205, cz: 0.015, rx: 0.25, ry: 0.318, rz: 0.272 };
     const RING = TAU / 0.031;
 
-    // Shell
+    // Anatomically Sculpted Humanoid Head Shell (Jawline, Nose, Orbit Cavities, Cheekbones, Lips)
     const nShell = 180000;
     for (let i = 0; i < nShell; i++) {
       const u = rnd() * 2 - 1,
@@ -904,9 +904,50 @@ export class WebGLEngine {
 
       const d = [gauss(), gauss(), gauss()];
       const dl = Math.hypot(d[0], d[1], d[2]) || 1;
-      x = x * 0.92 + (d[0] / dl) * 0.08;
-      y = y * 0.92 + (d[1] / dl) * 0.08;
-      z = z * 0.92 + (d[2] / dl) * 0.08;
+      x = x * 0.94 + (d[0] / dl) * 0.06;
+      y = y * 0.94 + (d[1] / dl) * 0.06;
+      z = z * 0.94 + (d[2] / dl) * 0.06;
+
+      // 1. Jawline & Chin Taper
+      if (y < 0) {
+        const jawTaper = 1.0 - 0.36 * Math.pow(Math.abs(y), 1.25);
+        x *= jawTaper;
+        z *= 1.0 - 0.18 * Math.pow(Math.abs(y), 1.15);
+      }
+
+      // 2. Nose Bridge & Tip Projection
+      if (z > 0) {
+        const noseY = y - 0.02;
+        const noseFactor = Math.exp(-70 * (x * x)) * Math.exp(-24 * (noseY * noseY));
+        z += noseFactor * 0.38;
+      }
+
+      // 3. Eye Sockets / Orbital Cavities
+      if (z > 0) {
+        const eyeL = Math.hypot(x - 0.32, y - 0.08);
+        const eyeR = Math.hypot(x + 0.32, y - 0.08);
+        const socketIndent = Math.exp(-32 * eyeL * eyeL) + Math.exp(-32 * eyeR * eyeR);
+        z -= socketIndent * 0.18;
+      }
+
+      // 4. Cheekbones / Zygomatic Arch
+      if (z > 0) {
+        const cheek = Math.exp(-28 * (Math.pow(Math.abs(x) - 0.48, 2) + Math.pow(y + 0.05, 2)));
+        x *= 1.0 + cheek * 0.14;
+        z += cheek * 0.12;
+      }
+
+      // 5. Lips & Mouth Contour
+      if (z > 0 && y < -0.10 && y > -0.32) {
+        const lipY = y + 0.20;
+        const lipFactor = Math.exp(-55 * (x * x)) * Math.exp(-65 * (lipY * lipY));
+        z += lipFactor * 0.14;
+      }
+
+      // 6. Forehead Ridge
+      if (z > 0 && y > 0.22 && y < 0.70) {
+        z += Math.exp(-14 * (x * x)) * 0.06;
+      }
 
       let px = x * HEAD.rx,
         py = y * HEAD.ry + HEAD.cy,
@@ -921,6 +962,94 @@ export class WebGLEngine {
 
       const band = (py - HEAD.cy) * RING;
       push(px, py, pz, nx, ny, nz, band, TYPE_SHELL, 1.0, 0.0032);
+    }
+
+    // High-Detail Expressive Facial Features (Eyes, Pupils, Eyebrows, Lips)
+    const eyeOffsetX = cfg.eyes?.x || 0.083;
+    const eyeOffsetY = cfg.eyes?.y || 0.02;
+    for (const side of [-1, 1]) {
+      const ex = side * eyeOffsetX;
+      const ey = HEAD.cy + eyeOffsetY;
+      const ez = HEAD.cz + HEAD.rz * 0.88;
+
+      // Iris & Pupil Ring
+      const nEye = 1800;
+      for (let k = 0; k < nEye; k++) {
+        const a = rnd() * TAU;
+        const r = 0.006 + rnd() * 0.022;
+        push(
+          ex + Math.cos(a) * r,
+          ey + Math.sin(a) * r,
+          ez + (rnd() - 0.5) * 0.01,
+          0,
+          0,
+          1,
+          0,
+          TYPE_EYE,
+          1.0,
+          0.0055
+        );
+      }
+    }
+
+    // Eyebrow Contours
+    for (const side of [-1, 1]) {
+      for (let k = 0; k < 600; k++) {
+        const t = k / 600;
+        const bx = side * (0.025 + t * 0.11);
+        const by = HEAD.cy + 0.082 + Math.sin(t * Math.PI) * 0.018;
+        const bz = HEAD.cz + HEAD.rz * 0.86 + Math.cos(t * Math.PI) * 0.01;
+        push(
+          bx + (rnd() - 0.5) * 0.008,
+          by + (rnd() - 0.5) * 0.006,
+          bz,
+          0,
+          0,
+          1,
+          0,
+          TYPE_EYE,
+          1.0,
+          0.0048
+        );
+      }
+    }
+
+    // Lips & Mouth Arc
+    for (let k = 0; k < 900; k++) {
+      const t = k / 900;
+      const lx = (t - 0.5) * 0.13;
+      const ly = HEAD.cy - 0.16 + Math.pow(lx, 2) * 0.4;
+      const lz = HEAD.cz + HEAD.rz * 0.85 + (1.0 - Math.pow(t - 0.5, 2) * 4) * 0.02;
+      push(
+        lx + (rnd() - 0.5) * 0.006,
+        ly + (rnd() - 0.5) * 0.005,
+        lz,
+        0,
+        0,
+        1,
+        0,
+        TYPE_EYE,
+        1.0,
+        0.0042
+      );
+    }
+
+    // Fiber-Optic Neural Neck, Shoulders & Chest Collar Structure (matching Instagram Reel)
+    const nTorso = 65000;
+    for (let i = 0; i < nTorso; i++) {
+      const t = rnd(); // 0 at chin base, 1 at lower shoulders
+      const y = HEAD.cy - HEAD.ry * 0.95 - t * 0.68;
+      const widthFactor = 0.11 + t * 0.36 + Math.pow(t, 2) * 0.26;
+      const angle = rnd() * TAU;
+      const r = widthFactor * (0.86 + rnd() * 0.18);
+      const x = Math.cos(angle) * r;
+      const z = Math.sin(angle) * r * 0.62 + HEAD.cz;
+
+      const nx = x / (r || 1);
+      const ny = -0.28;
+      const nz = (z - HEAD.cz) / (r || 1);
+      const band = y * RING;
+      push(x, y, z, nx, ny, nz, band, TYPE_SHELL, 0.85 + (1 - t) * 0.15, 0.0034);
     }
 
     // Core

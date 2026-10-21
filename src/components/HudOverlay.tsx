@@ -100,14 +100,12 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
         </div>
       )}
 
-      {/* Gesture Camera Mini Preview */}
+      {/* Gesture Camera Mini Preview (Hidden per user request) */}
       <canvas
         ref={gestureCanvasRef}
         width={120}
         height={90}
-        className={`absolute left-6 bottom-40 w-[120px] h-[90px] rounded-lg border border-[rgba(79,210,255,0.28)] bg-[#04090e] transition-opacity duration-300 pointer-events-auto ${
-          gestureActive ? 'block opacity-85' : 'hidden opacity-0'
-        }`}
+        className="hidden opacity-0 pointer-events-none"
       />
 
       {/* Bottom Left Info */}

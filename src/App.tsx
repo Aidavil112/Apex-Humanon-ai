@@ -573,9 +573,8 @@ export const App: React.FC = () => {
         setSfxOn(true);
         audio.setSfx(true);
       }
-      if (!gestureActive) startGesture();
       if (!isListening) startEars();
-      toast('Systems online · speak or move your hand', 3000);
+      toast('Systems online · AI voice & trading bot active', 3000);
     } else {
       setPoweredOn(false);
       if (isListening) stopEars();
