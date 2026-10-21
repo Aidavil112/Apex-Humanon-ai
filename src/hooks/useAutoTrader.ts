@@ -131,6 +131,17 @@ interface UseAutoTraderProps {
   onTradeBurst?: (type: 'BUY' | 'SELL', details: { pair: string; price: number; profit?: number }) => void;
 }
 
+export const GEO_HUBS = [
+  { city: 'Mumbai', country: 'India', lat: 19.0760, lng: 72.8777, label: 'CoinDCX Node (IN)' },
+  { city: 'Singapore', country: 'Singapore', lat: 1.3521, lng: 103.8198, label: 'Binance SG Hub' },
+  { city: 'Tokyo', country: 'Japan', lat: 35.6762, lng: 139.6503, label: 'BitFlyer Node (JP)' },
+  { city: 'London', country: 'UK', lat: 51.5074, lng: -0.1278, label: 'LMAX Hub (UK)' },
+  { city: 'New York', country: 'USA', lat: 40.7128, lng: -74.0060, label: 'Gemini NY Node' },
+  { city: 'Dubai', country: 'UAE', lat: 25.2048, lng: 55.2708, label: 'Bybit MENA Hub' },
+  { city: 'Frankfurt', country: 'Germany', lat: 50.1109, lng: 8.6821, label: 'Eurex Node (DE)' },
+  { city: 'Zurich', country: 'Switzerland', lat: 47.3769, lng: 8.5417, label: 'Crypto Valley (CH)' },
+];
+
 export function useAutoTrader({
   currentMood,
   currentHeartRate,
@@ -180,6 +191,7 @@ export function useAutoTrader({
       amount: 0.18,
       reason: 'Auto-Analysis: EMA 20/50 Golden Cross + Apex Excitement spike',
       sentimentTrigger: 'EXCITED (92%)',
+      geo: GEO_HUBS[0],
     },
     {
       id: 'log-2',
@@ -190,6 +202,7 @@ export function useAutoTrader({
       amount: 25,
       reason: 'Auto-Analysis: RSI 34.2 Oversold Bounce on 5m chart',
       sentimentTrigger: 'HAPPY (88%)',
+      geo: GEO_HUBS[1],
     },
     {
       id: 'log-3',
@@ -201,6 +214,7 @@ export function useAutoTrader({
       profit: 320.0,
       reason: 'Auto-Analysis: Profit Target 2 reached (+5.8%)',
       sentimentTrigger: 'EUPHORIC (96%)',
+      geo: GEO_HUBS[3],
     },
   ]);
 

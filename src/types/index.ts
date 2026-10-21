@@ -48,6 +48,14 @@ export interface TradingPosition {
   status: 'OPEN' | 'CLOSED';
 }
 
+export interface TradeGeoLocation {
+  city: string;
+  country: string;
+  lat: number;
+  lng: number;
+  label?: string;
+}
+
 export interface TradeOrderLog {
   id: string;
   time: string;
@@ -58,6 +66,7 @@ export interface TradeOrderLog {
   profit?: number;
   reason: string;
   sentimentTrigger: string;
+  geo?: TradeGeoLocation;
 }
 
 export interface ChartTradeMarker {

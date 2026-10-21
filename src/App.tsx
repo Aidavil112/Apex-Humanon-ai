@@ -56,6 +56,19 @@ export const App: React.FC = () => {
   const [heartPulse, setHeartPulse] = useState<number>(0);
   const [isElevated, setIsElevated] = useState<boolean>(false);
 
+  // Speech Voices Pre-Warming State
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return;
+    const updateVoices = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length > 0) setVoices(v);
+    };
+    updateVoices();
+    window.speechSynthesis.onvoiceschanged = updateVoices;
+  }, []);
+
   // Features
   const [gestureActive, setGestureActive] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -133,74 +146,152 @@ export const App: React.FC = () => {
     []
   );
 
-  const voiceFor = useCallback((text: string): SpeechSynthesisVoice | null => {
-    if (!('speechSynthesis' in window)) return null;
-    const voices = speechSynthesis.getVoices();
-    const isDevanagari = DEVANAGARI_RE.test(text);
-    if (isDevanagari) {
-      const hi = voices.find((v) => v.lang.startsWith('hi'));
-      if (hi) return hi;
-    }
-    const enIn = voices.find((v) => v.lang === 'en-IN');
-    if (enIn) return enIn;
-    return voices.find((v) => v.lang.startsWith('en')) || voices[0] || null;
-  }, []);
+  const voiceFor = useCallback(
+    (text: string): SpeechSynthesisVoice | null => {
+      if (!('speechSynthesis' in window)) return null;
+      const avail = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
+      const isDevanagari = DEVANAGARI_RE.test(text);
+      if (isDevanagari) {
+        const hi = avail.find((v) => v.lang.startsWith('hi'));
+        if (hi) return hi;
+      }
+      const enIn = avail.find((v) => v.lang === 'en-IN');
+      if (enIn) return enIn;
+      const en = avail.find((v) => v.lang.startsWith('en'));
+      if (en) return en;
+      return avail[0] || null;
+    },
+    [voices]
+  );
 
-  const speak = useCallback(
-    (text: string, onEnd?: () => void) => {
-      if (!('speechSynthesis' in window)) return;
-      speechSynthesis.cancel();
+  const playServerVoice = useCallback(
+    async (text: string, onEnd?: () => void) => {
       try {
-        speechSynthesis.resume();
-      } catch (e) {}
+        const res = await fetch('/yt/voice', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text, voice: langMode === 'hi-IN' ? 'Puck' : 'Kore' }),
+        });
+        if (!res.ok) throw new Error('Voice fetch status ' + res.status);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audioEl = new Audio(url);
 
-      const u = new SpeechSynthesisUtterance(text);
-      const voice = voiceFor(text);
-      if (voice) u.voice = voice;
-      u.lang = DEVANAGARI_RE.test(text) ? 'hi-IN' : langMode;
-      u.rate = langMode === 'hi-IN' ? 0.94 : 0.98;
-      u.pitch = 0.92;
-      u.volume = 1;
+        let pulseInterval: any = null;
+        audioEl.onplay = () => {
+          audio.ensureCtx();
+          if (engineRef.current) engineRef.current.voiceTarget = 1.0;
+          pulseInterval = setInterval(() => {
+            audio.triggerVoicePulse(0.9);
+            if (engineRef.current) engineRef.current.voiceTarget = 0.8 + Math.random() * 0.4;
+          }, 120);
+        };
 
-      u.onstart = () => {
-        audio.ensureCtx();
-        audio.triggerVoicePulse(1.0);
-      };
-
-      u.onboundary = () => {
-        if (engineRef.current) {
-          engineRef.current.voiceTarget = 1.0;
-        }
-        audio.triggerVoicePulse(0.85);
-      };
-
-      u.onend = () => {
-        if (engineRef.current) {
-          engineRef.current.voiceTarget = 0.15;
-        }
-        setTimeout(() => {
+        audioEl.onended = () => {
+          clearInterval(pulseInterval);
+          if (engineRef.current) engineRef.current.voiceTarget = 0.15;
+          URL.revokeObjectURL(url);
           activeSentimentRef.current = null;
           setSentimentInfo(null);
           setMood('idle');
           onEnd?.();
-        }, 300);
-      };
+        };
 
-      u.onerror = () => {
-        activeSentimentRef.current = null;
-        setSentimentInfo(null);
-        setMood('idle');
-      };
+        audioEl.onerror = () => {
+          clearInterval(pulseInterval);
+          if (engineRef.current) engineRef.current.voiceTarget = 0.15;
+          activeSentimentRef.current = null;
+          setSentimentInfo(null);
+          setMood('idle');
+        };
 
-      // If an emotional tone was detected from user sentiment, keep that emotional mood active; otherwise use 'speaking'
+        await audioEl.play();
+        return true;
+      } catch (err) {
+        console.warn('Server TTS failed:', err);
+        return false;
+      }
+    },
+    [langMode, setMood]
+  );
+
+  const speak = useCallback(
+    (text: string, onEnd?: () => void) => {
+      audio.ensureCtx();
+
       if (!activeSentimentRef.current || activeSentimentRef.current === 'idle') {
         setMood('speaking');
       } else {
         audio.mood(activeSentimentRef.current);
       }
-      speechSynthesis.speak(u);
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        try {
+          window.speechSynthesis.resume();
+        } catch (e) {}
+
+        const u = new SpeechSynthesisUtterance(text);
+        const voice = voiceFor(text);
+        if (voice) u.voice = voice;
+        u.lang = DEVANAGARI_RE.test(text) ? 'hi-IN' : langMode;
+        u.rate = langMode === 'hi-IN' ? 0.94 : 0.98;
+        u.pitch = 0.92;
+        u.volume = 1;
+
+        let spoke = false;
+
+        u.onstart = () => {
+          spoke = true;
+          audio.ensureCtx();
+          audio.triggerVoicePulse(1.0);
+        };
+
+        u.onboundary = () => {
+          if (engineRef.current) {
+            engineRef.current.voiceTarget = 1.0;
+          }
+          audio.triggerVoicePulse(0.85);
+        };
+
+        u.onend = () => {
+          if (engineRef.current) {
+            engineRef.current.voiceTarget = 0.15;
+          }
+          setTimeout(() => {
+            activeSentimentRef.current = null;
+            setSentimentInfo(null);
+            setMood('idle');
+            onEnd?.();
+          }, 300);
+        };
+
+        u.onerror = async () => {
+          console.warn('Web speech error, falling back to server TTS');
+          const ok = await playServerVoice(text, onEnd);
+          if (!ok) {
+            activeSentimentRef.current = null;
+            setSentimentInfo(null);
+            setMood('idle');
+          }
+        };
+
+        window.speechSynthesis.speak(u);
+
+        // Fallback if browser SpeechSynthesis gets stuck without firing onstart
+        setTimeout(async () => {
+          if (!spoke && !window.speechSynthesis.speaking) {
+            const ok = await playServerVoice(text, onEnd);
+            if (!ok) {
+              setMood('idle');
+            }
+          }
+        }, 600);
+      } else {
+        playServerVoice(text, onEnd);
+      }
     },
-    [voiceFor, langMode, setMood]
+    [voiceFor, langMode, setMood, playServerVoice]
   );
 
   const handleTradeBurst = useCallback(
@@ -662,10 +753,13 @@ export const App: React.FC = () => {
   // Voice Test
   const testVoice = useCallback(() => {
     audio.ensureCtx();
-    const sample = 'Hello! Main aapka APEX humanoid hoon. Everything is rendering live.';
-    toast('Testing speech synthesis…', 2000);
+    const sample =
+      langMode === 'hi-IN'
+        ? 'Namaste! Main APEX humanoid hoon. Meri aawaz bilkul active hai!'
+        : 'Hello! I am your APEX humanoid assistant. Speech audio is online and active!';
+    toast('Testing AI Voice output…', 2500);
     speak(sample);
-  }, [toast, speak]);
+  }, [langMode, toast, speak]);
 
   // Replay
   const replayAssembly = useCallback(() => {
@@ -827,6 +921,10 @@ export const App: React.FC = () => {
     if (engineRef.current) {
       engineRef.current.started = true;
     }
+    // Greet user on enter
+    setTimeout(() => {
+      speak('Namaste! Main APEX humanoid hoon. Ask me anything or open the trading bot.');
+    }, 400);
   };
 
   return (
@@ -875,6 +973,7 @@ export const App: React.FC = () => {
           setMenuOpen((prev) => !prev);
         }}
         onToggleMic={toggleMic}
+        onTestVoice={testVoice}
       />
 
       {/* Slide-up Menu Drawer */}

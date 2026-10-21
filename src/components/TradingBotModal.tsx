@@ -1,5 +1,156 @@
 import React, { useRef, useEffect, useState } from 'react';
+import * as d3 from 'd3';
 import { MarketPairData, TradingPosition, TradeOrderLog, AutoAnalysisItem, MoodType } from '../types';
+import { CryptoNewsModal } from './CryptoNewsModal';
+
+const GEO_HUBS = [
+  { city: 'Mumbai', country: 'India', lat: 19.0760, lng: 72.8777, label: 'CoinDCX Node (IN)' },
+  { city: 'Singapore', country: 'Singapore', lat: 1.3521, lng: 103.8198, label: 'Binance SG' },
+  { city: 'Tokyo', country: 'Japan', lat: 35.6762, lng: 139.6503, label: 'BitFlyer JP' },
+  { city: 'London', country: 'UK', lat: 51.5074, lng: -0.1278, label: 'LMAX London' },
+  { city: 'New York', country: 'USA', lat: 40.7128, lng: -74.0060, label: 'Gemini NY' },
+  { city: 'Dubai', country: 'UAE', lat: 25.2048, lng: 55.2708, label: 'Bybit MENA' },
+  { city: 'Frankfurt', country: 'Germany', lat: 50.1109, lng: 8.6821, label: 'Eurex DE' },
+  { city: 'Zurich', country: 'Switzerland', lat: 47.3769, lng: 8.5417, label: 'Crypto Valley' },
+];
+
+const OrderGeoMap: React.FC<{ logs: TradeOrderLog[] }> = ({ logs }) => {
+  const mapSvgRef = useRef<SVGSVGElement | null>(null);
+
+  useEffect(() => {
+    const svgEl = mapSvgRef.current;
+    if (!svgEl) return;
+
+    const svg = d3.select(svgEl);
+    svg.selectAll('*').remove();
+
+    const w = 720;
+    const h = 210;
+
+    // Projection & Path generator
+    const projection = d3
+      .geoEquirectangular()
+      .scale(102)
+      .translate([w / 2, h / 2 + 10]);
+
+    const pathGenerator = d3.geoPath().projection(projection);
+
+    // Grid lines (Graticule)
+    const graticule = d3.geoGraticule().step([30, 30]);
+    svg
+      .append('path')
+      .datum(graticule)
+      .attr('d', pathGenerator)
+      .attr('fill', 'none')
+      .attr('stroke', 'rgba(79, 210, 255, 0.08)')
+      .attr('stroke-width', 0.8);
+
+    // Map Outline Box & Equator
+    svg
+      .append('path')
+      .datum(d3.geoGraticule().outline())
+      .attr('d', pathGenerator)
+      .attr('fill', 'none')
+      .attr('stroke', 'rgba(79, 210, 255, 0.22)')
+      .attr('stroke-width', 1.2);
+
+    // Base Hub Nodes
+    GEO_HUBS.forEach((hub) => {
+      const coords = projection([hub.lng, hub.lat]);
+      if (!coords) return;
+      const [x, y] = coords;
+
+      // Small hub dot
+      svg
+        .append('circle')
+        .attr('cx', x)
+        .attr('cy', y)
+        .attr('r', 2.8)
+        .attr('fill', 'rgba(79, 210, 255, 0.55)');
+
+      // Hub City Label
+      svg
+        .append('text')
+        .attr('x', x)
+        .attr('y', y - 6)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'rgba(125, 212, 255, 0.65)')
+        .attr('font-size', '7.5px')
+        .attr('font-family', 'sans-serif')
+        .text(hub.city);
+    });
+
+    // Plot Order Logs with Geo Location metadata
+    logs.slice(0, 8).forEach((log, i) => {
+      const geo = log.geo || GEO_HUBS[i % GEO_HUBS.length];
+      const coords = projection([geo.lng, geo.lat]);
+      if (!coords) return;
+      const [x, y] = coords;
+
+      const isBuy = log.type === 'BUY';
+      const color = isBuy ? '#00f5a0' : log.profit ? '#ffd13b' : '#ff4f70';
+
+      // Outer Pulse Ring
+      svg
+        .append('circle')
+        .attr('cx', x)
+        .attr('cy', y)
+        .attr('r', 9)
+        .attr('fill', 'none')
+        .attr('stroke', color)
+        .attr('stroke-width', 1.2)
+        .attr('opacity', 0.6);
+
+      // Order Core Dot
+      svg
+        .append('circle')
+        .attr('cx', x)
+        .attr('cy', y)
+        .attr('r', 4)
+        .attr('fill', color);
+
+      // Order callout badge text
+      const labelText = `${isBuy ? '▲ BUY' : '▼ SELL'} ${log.pair} ($${log.price.toLocaleString()})`;
+      svg
+        .append('text')
+        .attr('x', x)
+        .attr('y', y + 14)
+        .attr('text-anchor', 'middle')
+        .attr('fill', color)
+        .attr('font-size', '8px')
+        .attr('font-weight', 'bold')
+        .attr('font-family', 'monospace')
+        .text(labelText);
+    });
+  }, [logs]);
+
+  return (
+    <div className="p-3.5 rounded-xl bg-[#081522] border border-[rgba(79,210,255,0.15)] space-y-2">
+      <div className="flex items-center justify-between border-b border-[rgba(79,210,255,0.1)] pb-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold text-white tracking-wider uppercase">
+            🌍 Global Order Geo-Location Map (D3 Plot)
+          </span>
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[rgba(0,245,160,0.15)] text-[#00f5a0] border border-[rgba(0,245,160,0.3)] font-semibold">
+            Live Geo-Node Sync
+          </span>
+        </div>
+        <span className="text-[9.5px] text-[#55819c]">
+          {GEO_HUBS.length} Exchange Nodes Connected
+        </span>
+      </div>
+
+      <div className="w-full h-48 bg-[#040a10] rounded-lg border border-[rgba(79,210,255,0.1)] p-1 relative overflow-hidden flex items-center justify-center">
+        <svg ref={mapSvgRef} viewBox="0 0 720 210" className="w-full h-full block" />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[9.5px] text-[#6d96b0] pt-0.5">
+        <span>Nodes: Mumbai (CoinDCX) · Singapore · Tokyo · London · New York · Dubai</span>
+        <span className="text-[#00f5a0]">🟢 Low Latency Sync (&lt;14ms)</span>
+      </div>
+    </div>
+  );
+};
 
 interface TradingBotModalProps {
   isOpen: boolean;
@@ -52,6 +203,7 @@ export const TradingBotModal: React.FC<TradingBotModalProps> = ({
   const [inrBalance, setInrBalance] = useState<string>('128,450.00');
   const [usdtBalance, setUsdtBalance] = useState<string>('1,540.25');
   const [connectMsg, setConnectMsg] = useState<string | null>(null);
+  const [isNewsModalOpen, setIsNewsModalOpen] = useState<boolean>(false);
 
   const checkCoinDcxBalances = async (k?: string, s?: string) => {
     const keyToUse = k !== undefined ? k : coindcxKey;
@@ -473,6 +625,14 @@ export const TradingBotModal: React.FC<TradingBotModalProps> = ({
               >
                 🚀 Trigger Surge (+18%)
               </button>
+              <button
+                onClick={() => setIsNewsModalOpen(true)}
+                className="px-3 py-1.5 rounded-lg bg-[rgba(79,210,255,0.18)] border border-[#4fd2ff] text-[#4fd2ff] hover:bg-[#4fd2ff] hover:text-[#041620] text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer shadow-[0_0_10px_rgba(79,210,255,0.25)] flex items-center gap-1.5"
+                title="Fetch latest 5 search-grounded market news headlines"
+              >
+                <span>📰</span>
+                <span>Search Grounded News (Top 5)</span>
+              </button>
             </div>
           </div>
 
@@ -522,6 +682,9 @@ export const TradingBotModal: React.FC<TradingBotModalProps> = ({
               ))}
             </div>
           </div>
+
+          {/* D3 Map Visualization for Geo-Location Order Tracking */}
+          <OrderGeoMap logs={tradeLogs} />
 
           {/* Bottom Grid: Active Positions & Trade Execution Audit */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
@@ -613,6 +776,9 @@ export const TradingBotModal: React.FC<TradingBotModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Search Grounding Crypto News Modal */}
+      <CryptoNewsModal isOpen={isNewsModalOpen} onClose={() => setIsNewsModalOpen(false)} />
     </div>
   );
 };
