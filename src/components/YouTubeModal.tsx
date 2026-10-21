@@ -607,6 +607,52 @@ export const YouTubeModal: React.FC<YouTubeModalProps> = ({ isOpen, onClose, onT
         {/* 1. AUTOPILOT AGENT VIEW */}
         {tab === 'autopilot' && (
           <div className="flex flex-col gap-4">
+            {/* YouTube OAuth Connection Banner */}
+            <div className="p-3.5 rounded-xl bg-[rgba(10,24,34,0.85)] border border-[rgba(79,210,255,0.25)] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">{accessToken ? '🟢' : '🔴'}</span>
+                  <span className="text-xs font-bold text-[#eaf9ff]">
+                    YouTube Channel Status: {accessToken ? 'Connected for Auto-Upload' : 'OAuth Token Needed for Direct Upload'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-[#6393b0] mt-0.5">
+                  Scopes Provisioned: <code className="text-[#4fd2ff]">youtube.upload</code>, <code className="text-[#4fd2ff]">youtube.readonly</code>
+                </div>
+              </div>
+
+              {!accessToken ? (
+                <div className="flex gap-2 w-full sm:w-auto">
+                  <input
+                    type="password"
+                    value={accessToken}
+                    onChange={(e) => setAccessToken(e.target.value)}
+                    placeholder="Paste OAuth Token..."
+                    className="bg-[#050c12] border border-[#1d3a4d] rounded-lg px-2.5 py-1.5 text-xs text-[#d8f2ff] w-full sm:w-40 focus:outline-none focus:border-[#4fd2ff]"
+                  />
+                  <button
+                    onClick={() => {
+                      if (accessToken.trim()) onToast('YouTube OAuth Token Saved!');
+                      else onToast('Please enter your Google OAuth token');
+                    }}
+                    className="cursor-pointer whitespace-nowrap px-3 py-1.5 bg-[#1877f2] hover:bg-[#166fe5] text-white font-bold text-xs rounded-lg shadow-sm"
+                  >
+                    Save
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setAccessToken('');
+                    onToast('YouTube Access Token Disconnected');
+                  }}
+                  className="cursor-pointer text-[10.5px] text-[#ff6b6b] underline hover:text-[#ff8f8f]"
+                >
+                  Disconnect Token
+                </button>
+              )}
+            </div>
+
             <div className="p-4 rounded-xl bg-[rgba(10,24,34,0.7)] border border-[rgba(79,210,255,0.2)]">
               <div className="text-xs text-[#a5d8f0] font-semibold mb-2 flex items-center justify-between">
                 <span>Select Target Niche for AI Agent:</span>
